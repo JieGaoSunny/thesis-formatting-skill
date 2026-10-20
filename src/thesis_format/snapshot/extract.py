@@ -37,19 +37,58 @@ EXCLUDED_FIELDS = frozenset(
 OBJECT_MARKER = "\ufffc"
 
 
+@dataclass
+class _FieldFrame:
+    instruction: str = ""
+    result: bool = False
+    exclude: bool = False
+
+
+@dataclass
+class _FieldState:
+    stack: list[_FieldFrame] = field(default_factory=list)
+
+    def copy(self) -> _FieldState:
+        return _FieldState(
+            [
+                _FieldFrame(frame.instruction, frame.result, frame.exclude)
+                for frame in self.stack
+            ]
+        )
+
+
+@dataclass(frozen=True)
+class _ParagraphContent:
+    start_state: _FieldState
+    visible: str
+    filtered: str
+
+
 def _field_name(instruction: str) -> str:
     match = re.match(r"\s*([A-Za-z]+)", instruction)
     return match.group(1).upper() if match else ""
 
 
-def _paragraph_text(
+def _inside_excluded_result(state: _FieldState) -> bool:
+    return any(frame.result and frame.exclude for frame in state.stack)
+
+
+def _inside_excluded_simple_field(descendant: etree._Element) -> bool:
+    return any(
+        etree.QName(ancestor).localname == "fldSimple"
+        and _field_name(ancestor.get(f"{W}instr", "")) in EXCLUDED_FIELDS
+        for ancestor in descendant.iterancestors()
+    )
+
+
+def _paragraph_texts(
     paragraph: etree._Element,
+    field_state: _FieldState,
     *,
-    exclude_results: bool,
     stop_before: etree._Element | None = None,
-) -> str:
-    pieces: list[str] = []
-    stack: list[dict[str, object]] = []
+) -> tuple[str, str]:
+    visible_pieces: list[str] = []
+    filtered_pieces: list[str] = []
     for descendant in paragraph.iter():
         if descendant is stop_before:
             break
@@ -59,40 +98,66 @@ def _paragraph_text(
         if local == "fldChar":
             field_type = descendant.get(f"{W}fldCharType")
             if field_type == "begin":
-                stack.append({"instruction": "", "result": False, "exclude": False})
-            elif field_type == "separate" and stack:
-                instruction = str(stack[-1]["instruction"])
-                stack[-1]["result"] = True
-                stack[-1]["exclude"] = _field_name(instruction) in EXCLUDED_FIELDS
-            elif field_type == "end" and stack:
-                stack.pop()
-        elif local == "instrText" and stack and descendant.text:
-            stack[-1]["instruction"] = str(stack[-1]["instruction"]) + descendant.text
+                field_state.stack.append(_FieldFrame())
+            elif field_type == "separate" and field_state.stack:
+                frame = field_state.stack[-1]
+                frame.result = True
+                frame.exclude = _field_name(frame.instruction) in EXCLUDED_FIELDS
+            elif field_type == "end" and field_state.stack:
+                field_state.stack.pop()
+        elif local == "instrText" and field_state.stack and descendant.text:
+            field_state.stack[-1].instruction += descendant.text
         elif (
             local == "t"
             and etree.QName(descendant).namespace == W_NS
             and descendant.text
         ):
-            simple = next(
-                (
-                    ancestor
-                    for ancestor in descendant.iterancestors()
-                    if etree.QName(ancestor).localname == "fldSimple"
-                ),
-                None,
-            )
-            simple_excluded = (
-                simple is not None
-                and _field_name(simple.get(f"{W}instr", "")) in EXCLUDED_FIELDS
-            )
-            complex_excluded = bool(
-                stack and stack[-1]["result"] and stack[-1]["exclude"]
-            )
-            if not exclude_results or not (simple_excluded or complex_excluded):
-                pieces.append(descendant.text)
+            visible_pieces.append(descendant.text)
+            if not (
+                _inside_excluded_simple_field(descendant)
+                or _inside_excluded_result(field_state)
+            ):
+                filtered_pieces.append(descendant.text)
         elif local in {"tab", "br", "cr"}:
-            pieces.append(" ")
-    return normalize_text("".join(pieces))
+            visible_pieces.append(" ")
+            if not (
+                _inside_excluded_simple_field(descendant)
+                or _inside_excluded_result(field_state)
+            ):
+                filtered_pieces.append(" ")
+    return (
+        normalize_text("".join(visible_pieces)),
+        normalize_text("".join(filtered_pieces)),
+    )
+
+
+def _paragraph_text(
+    paragraph: etree._Element,
+    *,
+    exclude_results: bool,
+    stop_before: etree._Element | None = None,
+    field_state: _FieldState | None = None,
+) -> str:
+    visible, filtered = _paragraph_texts(
+        paragraph,
+        field_state or _FieldState(),
+        stop_before=stop_before,
+    )
+    return filtered if exclude_results else visible
+
+
+def _story_paragraph_texts(
+    root: etree._Element,
+) -> dict[etree._Element, _ParagraphContent]:
+    field_state = _FieldState()
+    result: dict[etree._Element, _ParagraphContent] = {}
+    for paragraph in root.iter(f"{W}p"):
+        if any(ancestor.tag == f"{W}p" for ancestor in paragraph.iterancestors()):
+            continue
+        start_state = field_state.copy()
+        visible, filtered = _paragraph_texts(paragraph, field_state)
+        result[paragraph] = _ParagraphContent(start_state, visible, filtered)
+    return result
 
 
 def _style_role(
@@ -129,9 +194,18 @@ def _field_role(paragraph: etree._Element) -> str | None:
     return None
 
 
-def _clean_paragraph(paragraph: etree._Element, profile: FormatProfile) -> str:
-    visible = _paragraph_text(paragraph, exclude_results=False)
-    filtered = _paragraph_text(paragraph, exclude_results=True)
+def _clean_paragraph(
+    paragraph: etree._Element,
+    profile: FormatProfile,
+    paragraph_texts: dict[etree._Element, _ParagraphContent] | None = None,
+) -> str:
+    content = paragraph_texts.get(paragraph) if paragraph_texts else None
+    if content is None:
+        visible = _paragraph_text(paragraph, exclude_results=False)
+        filtered = _paragraph_text(paragraph, exclude_results=True)
+    else:
+        visible = content.visible
+        filtered = content.filtered
     return _clean_paragraph_text(paragraph, visible, filtered, profile)
 
 
@@ -349,6 +423,7 @@ def _note_references(
     profile: FormatProfile,
     *,
     exclude_nested_tables: bool = False,
+    paragraph_texts: dict[etree._Element, _ParagraphContent] | None = None,
 ) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     counts: Counter[str] = Counter()
@@ -373,11 +448,21 @@ def _note_references(
             character_offset = 0
             paragraph_key = id(element)
         else:
-            visible = _paragraph_text(paragraph, exclude_results=False)
+            content = paragraph_texts.get(paragraph) if paragraph_texts else None
+            visible = (
+                content.visible
+                if content is not None
+                else _paragraph_text(paragraph, exclude_results=False)
+            )
             filtered_prefix = _paragraph_text(
                 paragraph,
                 exclude_results=True,
                 stop_before=descendant,
+                field_state=(
+                    content.start_state.copy()
+                    if content is not None
+                    else None
+                ),
             )
             character_offset = len(
                 _clean_paragraph_text(
@@ -447,12 +532,16 @@ def _story_blocks(
             yield from _story_blocks(child, child_path)
 
 
-def _cell_text(cell: etree._Element, profile: FormatProfile) -> str:
+def _cell_text(
+    cell: etree._Element,
+    profile: FormatProfile,
+    paragraph_texts: dict[etree._Element, _ParagraphContent],
+) -> str:
     pieces: list[str] = []
     for child, _ in _story_blocks(cell, ""):
         local = etree.QName(child).localname
         if local == "p":
-            text = _clean_paragraph(child, profile)
+            text = _clean_paragraph(child, profile, paragraph_texts)
             if text:
                 pieces.append(text)
         elif local == "tbl":
@@ -463,6 +552,7 @@ def _cell_text(cell: etree._Element, profile: FormatProfile) -> str:
 def _table_cells(
     table: etree._Element,
     profile: FormatProfile,
+    paragraph_texts: dict[etree._Element, _ParagraphContent],
 ) -> tuple[list[tuple[etree._Element, str, dict[str, object]]], dict[str, object]]:
     rows = table.xpath("./w:tr", namespaces=NS)
     parsed: list[tuple[etree._Element, str, dict[str, object]]] = []
@@ -479,7 +569,7 @@ def _table_cells(
             v_merge: str | None = None
             if merge_nodes:
                 v_merge = merge_nodes[0].get(f"{W}val") or "continue"
-            text = _cell_text(cell, profile)
+            text = _cell_text(cell, profile, paragraph_texts)
             geometry = {
                 "row_count": len(rows),
                 "column_count": 0,
@@ -523,11 +613,12 @@ def _append_table_nodes(
     part: str,
     table_path: str,
     story: str,
+    paragraph_texts: dict[etree._Element, _ParagraphContent],
     index_offset: int = 0,
     note_id: str | None = None,
     note_type: str | None = None,
 ) -> None:
-    cells, table_signature = _table_cells(table, profile)
+    cells, table_signature = _table_cells(table, profile, paragraph_texts)
     table_identity = object_identities.identity(
         canonical_sha256(table_signature), story, "table"
     )
@@ -560,6 +651,7 @@ def _append_table_nodes(
                 index_offset + len(result),
                 profile,
                 exclude_nested_tables=True,
+                paragraph_texts=paragraph_texts,
             )
         )
         result.extend(
@@ -599,6 +691,7 @@ def _append_table_nodes(
                 part=part,
                 table_path=nested_path,
                 story=story,
+                paragraph_texts=paragraph_texts,
                 index_offset=index_offset,
                 note_id=note_id,
                 note_type=note_type,
@@ -613,14 +706,15 @@ def _story_nodes(
     body = package.xml("word/document.xml").find("w:body", namespaces=NS)
     if body is None:
         return []
+    paragraph_texts = _story_paragraph_texts(body)
     result: list[dict[str, object]] = []
     source_index = 0
     for child, base_path in _story_blocks(body, "/w:document/w:body"):
         local = etree.QName(child).localname
         if local == "p":
-            visible = _paragraph_text(child, exclude_results=False)
+            visible = paragraph_texts[child].visible
             role = _paragraph_role(child, visible, profile)
-            text = _clean_paragraph(child, profile)
+            text = _clean_paragraph(child, profile, paragraph_texts)
             if text:
                 result.append(
                     _candidate(
@@ -640,6 +734,7 @@ def _story_nodes(
                 base_path,
                 source_index,
                 profile,
+                paragraph_texts=paragraph_texts,
             )
             result.extend(references)
             source_index += len(references)
@@ -672,6 +767,7 @@ def _story_nodes(
                 part="word/document.xml",
                 table_path=base_path,
                 story="body",
+                paragraph_texts=paragraph_texts,
             )
             source_index = len(result)
     return result
@@ -707,10 +803,11 @@ def _note_nodes(
             pass
         base_path = f"/w:{kind}s/w:{kind}[@w:id='{note_id}']"
         story = f"{kind}:{note_id}"
+        paragraph_texts = _story_paragraph_texts(note)
         for child, child_path in _story_blocks(note, base_path):
             local = etree.QName(child).localname
             if local == "p":
-                text = _clean_paragraph(child, profile)
+                text = _clean_paragraph(child, profile, paragraph_texts)
                 if text:
                     result.append(
                         _candidate(
@@ -756,6 +853,7 @@ def _note_nodes(
                     part=part,
                     table_path=child_path,
                     story=story,
+                    paragraph_texts=paragraph_texts,
                     index_offset=source_index,
                     note_id=note_id,
                     note_type=kind,
@@ -793,13 +891,14 @@ def _section_story_nodes(
             )
             root = package.xml(part)
             story = f"{kind}:section:{section_index}:{reference_type}"
+            paragraph_texts = _story_paragraph_texts(root)
             story_path = (
                 f"/section[{section_index}]/{kind}[{reference_type}]"
             )
             for child, base_path in _story_blocks(root, story_path):
                 local = etree.QName(child).localname
                 if local == "p":
-                    text = _clean_paragraph(child, profile)
+                    text = _clean_paragraph(child, profile, paragraph_texts)
                     if text:
                         result.append(
                             _candidate(
@@ -838,6 +937,7 @@ def _section_story_nodes(
                         part=part,
                         table_path=base_path,
                         story=story,
+                        paragraph_texts=paragraph_texts,
                     )
     return result
 

@@ -47,6 +47,24 @@ def _field(paragraph, instruction: str, result: str) -> None:
     end_run._r.append(end)
 
 
+def _field_begin(paragraph, instruction: str) -> None:
+    run = paragraph.add_run()
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    instruction_node = OxmlElement("w:instrText")
+    instruction_node.text = instruction
+    separator = OxmlElement("w:fldChar")
+    separator.set(qn("w:fldCharType"), "separate")
+    run._r.extend((begin, instruction_node, separator))
+
+
+def _field_end(paragraph) -> None:
+    run = paragraph.add_run()
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    run._r.append(end)
+
+
 def _save(document: Document, path: Path) -> Path:
     document.save(path)
     return path
@@ -399,6 +417,194 @@ def test_extracts_fields_tables_references_headers_footers_and_empty_cells(
     assert cells == ["A", "", "C", "D"]
     assert [node["normalized_text"] for node in snapshot["headers"]] == ["Header One"]
     assert [node["normalized_text"] for node in snapshot["footers"]] == ["Footer"]
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        ' TOC \\o "1-3" ',
+        " PAGE ",
+        " PAGEREF target ",
+        " REF target ",
+        " SEQ Figure ",
+        " STYLEREF 1 ",
+    ],
+)
+def test_excludes_complex_field_results_spanning_multiple_paragraphs(
+    tmp_path: Path,
+    instruction: str,
+) -> None:
+    document = Document()
+    first = document.add_paragraph()
+    _field_begin(first, instruction)
+    first.add_run("Generated first")
+    document.add_paragraph("Generated second")
+    last = document.add_paragraph("Generated third")
+    _field_end(last)
+    last.add_run(" Retained text")
+
+    snapshot = extract_snapshot(
+        _save(document, tmp_path / "multi-paragraph-field.docx"),
+        PROFILE,
+    )
+
+    assert [
+        node["normalized_text"]
+        for node in snapshot["body"]
+        if node["node_type"] in {"paragraph", "caption"}
+    ] == ["Retained text"]
+
+
+def test_excludes_nested_field_results_until_the_outer_field_ends(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    first = document.add_paragraph()
+    _field_begin(first, ' TOC \\o "1-3" ')
+    first.add_run("Outer generated")
+    nested = document.add_paragraph("Outer before ")
+    _field_begin(nested, ' IF 1 = 1 "yes" "no" ')
+    nested.add_run("Nested generated")
+    _field_end(nested)
+    nested.add_run(" Outer after")
+    last = document.add_paragraph("Outer final")
+    _field_end(last)
+    last.add_run(" Retained text")
+
+    snapshot = extract_snapshot(
+        _save(document, tmp_path / "nested-fields.docx"),
+        PROFILE,
+    )
+
+    assert [
+        node["normalized_text"]
+        for node in snapshot["body"]
+        if node["node_type"] == "paragraph"
+    ] == ["Retained text"]
+
+
+def test_field_state_follows_document_order_through_tables(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    first = document.add_paragraph()
+    _field_begin(first, " REF target ")
+    first.add_run("Generated before table")
+    table = document.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "Generated in table"
+    last = document.add_paragraph("Generated after table")
+    _field_end(last)
+    last.add_run(" Retained text")
+
+    snapshot = extract_snapshot(
+        _save(document, tmp_path / "field-across-table.docx"),
+        PROFILE,
+    )
+
+    assert [
+        node["normalized_text"]
+        for node in snapshot["body"]
+        if node["node_type"] == "table"
+    ] == [""]
+    assert [
+        node["normalized_text"]
+        for node in snapshot["body"]
+        if node["node_type"] == "paragraph"
+    ] == ["Retained text"]
+
+
+def test_field_state_is_independent_for_body_header_footer_and_notes(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    body = document.add_paragraph()
+    _field_begin(body, " TOC ")
+    body.add_run("Body generated")
+    header = document.sections[0].header.paragraphs[0]
+    header.text = "Header retained"
+    footer = document.sections[0].footer.paragraphs[0]
+    footer.text = "Footer retained"
+    path = _save(document, tmp_path / "independent-field-stories.docx")
+    footnotes = (
+        b'<w:footnotes xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main">'
+        b'<w:footnote w:id="1"><w:p><w:r><w:fldChar w:fldCharType="begin"/>'
+        b"<w:instrText> REF target </w:instrText>"
+        b'<w:fldChar w:fldCharType="separate"/></w:r>'
+        b"<w:r><w:t>Note generated</w:t></w:r></w:p></w:footnote>"
+        b'<w:footnote w:id="2"><w:p><w:r><w:t>Note retained</w:t></w:r>'
+        b"</w:p></w:footnote></w:footnotes>"
+    )
+    _replace_note_part(path, "footnote", footnotes)
+
+    snapshot = extract_snapshot(path, PROFILE)
+
+    assert [
+        node["normalized_text"]
+        for node in snapshot["headers"]
+        if node["node_type"] == "header"
+    ] == ["Header retained"]
+    assert [
+        node["normalized_text"]
+        for node in snapshot["footers"]
+        if node["node_type"] == "footer"
+    ] == ["Footer retained"]
+    assert [
+        (node["note_id"], node["normalized_text"])
+        for node in snapshot["body"]
+        if node["node_type"] == "footnote"
+    ] == [("2", "Note retained")]
+
+
+def test_tracks_multi_paragraph_fields_in_header_footer_and_note_stories(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    document.add_paragraph("Body retained")
+    for story in (
+        document.sections[0].header,
+        document.sections[0].footer,
+    ):
+        first = story.paragraphs[0]
+        _field_begin(first, " STYLEREF 1 ")
+        first.add_run("Generated first")
+        story.add_paragraph("Generated second")
+        last = story.add_paragraph("Generated third")
+        _field_end(last)
+        last.add_run(" Retained text")
+    path = _save(document, tmp_path / "multi-paragraph-story-fields.docx")
+    footnotes = (
+        b'<w:footnotes xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main"><w:footnote w:id="1">'
+        b'<w:p><w:r><w:fldChar w:fldCharType="begin"/>'
+        b"<w:instrText> PAGEREF target </w:instrText>"
+        b'<w:fldChar w:fldCharType="separate"/></w:r>'
+        b"<w:r><w:t>Generated first</w:t></w:r></w:p>"
+        b"<w:p><w:r><w:t>Generated second</w:t></w:r></w:p>"
+        b"<w:p><w:r><w:t>Generated third</w:t></w:r>"
+        b'<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        b"<w:r><w:t> Retained text</w:t></w:r></w:p>"
+        b"</w:footnote></w:footnotes>"
+    )
+    _replace_note_part(path, "footnote", footnotes)
+
+    snapshot = extract_snapshot(path, PROFILE)
+
+    assert [
+        node["normalized_text"]
+        for node in snapshot["headers"]
+        if node["node_type"] == "header"
+    ] == ["Retained text"]
+    assert [
+        node["normalized_text"]
+        for node in snapshot["footers"]
+        if node["node_type"] == "footer"
+    ] == ["Retained text"]
+    assert [
+        node["normalized_text"]
+        for node in snapshot["body"]
+        if node["node_type"] == "footnote"
+    ] == ["Retained text"]
 
 
 @pytest.mark.parametrize("wrapper", ["sdt", "customXml"])
