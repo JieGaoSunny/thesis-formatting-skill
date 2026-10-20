@@ -108,6 +108,7 @@ class SemanticDocument:
     numbering: tuple[SemanticNumbering, ...]
     relationships: tuple[Relationship, ...]
     bookmarks: tuple[str, ...]
+    all_bookmark_targets: tuple[str, ...]
     headers: tuple[SemanticParagraph, ...]
     footers: tuple[SemanticParagraph, ...]
     warnings: tuple[str, ...]
@@ -183,12 +184,15 @@ def _fields(element: etree._Element) -> tuple[str, ...]:
     return tuple(values)
 
 
-def _bookmarks(element: etree._Element) -> tuple[str, ...]:
+def _all_bookmarks(element: etree._Element) -> tuple[str, ...]:
     return tuple(
         name
         for name in element.xpath(".//w:bookmarkStart/@w:name", namespaces=NS)
-        if not name.startswith("_")
     )
+
+
+def _bookmarks(element: etree._Element) -> tuple[str, ...]:
+    return tuple(name for name in _all_bookmarks(element) if not name.startswith("_"))
 
 
 def _style_id(element: etree._Element) -> str | None:
@@ -707,7 +711,7 @@ def _sections(document_root: etree._Element) -> tuple[SemanticSection, ...]:
     result: list[SemanticSection] = []
     paragraph_index = 0
     current_section_start = 1
-    for element in body.iterchildren():
+    for element in body.xpath(".//w:p | ./w:sectPr", namespaces=NS):
         if element.tag == f"{{{W_NS}}}p":
             paragraph_index += 1
             section_properties = element.find("./w:pPr/w:sectPr", namespaces=NS)
@@ -840,6 +844,22 @@ def inspect_document(
             for bookmark in node.bookmarks
         )
     )
+    bookmark_roots = (
+        document_root,
+        *(
+            package.xml(part_name)
+            for part_name in dict.fromkeys(
+                node.part_name for node in (*headers, *footers)
+            )
+        ),
+    )
+    all_bookmark_targets = tuple(
+        dict.fromkeys(
+            bookmark
+            for root in bookmark_roots
+            for bookmark in _all_bookmarks(root)
+        )
+    )
     warnings = tuple(
         dict.fromkeys(
             warning for node in paragraphs for warning in node.warnings
@@ -854,6 +874,7 @@ def inspect_document(
         numbering=_numbering(package),
         relationships=relationships,
         bookmarks=bookmarks,
+        all_bookmark_targets=all_bookmark_targets,
         headers=headers,
         footers=footers,
         warnings=warnings,

@@ -725,6 +725,32 @@ def test_identical_missing_crossrefs_have_unique_deterministic_findings(
     assert first["findings"] == second["findings"]
 
 
+def test_word_internal_cross_reference_target_is_validated_without_filtering(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "word-internal-crossrefs.docx",
+        [
+            {
+                "text": "Cross references",
+                "fields": ["REF _Ref123456", "REF _Ref_missing"],
+                "bookmark": "_Ref123456",
+            }
+        ],
+    )
+
+    findings = [
+        finding
+        for finding in audit_document(path, PROFILE, clock=lambda: NOW)["findings"]
+        if finding["rule_id"] == "FIELD.CROSS_REFERENCE.TARGET"
+    ]
+
+    assert len(findings) == 1
+    assert findings[0]["before"]["missing_target_sha256"] == (
+        "cf5de686179852a073bab241576c0be8f500a0383ac0c201fee6ac0511861827"
+    )
+
+
 def test_three_line_table_requires_visible_top_header_bottom_and_bottom(
     tmp_path: Path,
 ) -> None:
@@ -1313,6 +1339,63 @@ def test_front_and_body_page_resets_follow_semantic_region_starts(
 
     _set_section_page_number(path, 2, start=2, fmt="upperRoman")
     assert "HEADER.FOOTER.PAGE_RESET" in _rule_ids(path)
+
+
+def test_table_cell_paragraphs_do_not_shift_section_header_or_page_audits(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "table-section-audit.docx",
+        [
+            {"text": "中文题名", "style": "AppleTitleZH", "section_break": True},
+            {
+                "text": "第一章 正文",
+                "style": "AppleHeading1",
+                "section_break": True,
+            },
+            {"text": "附录 A", "style": "AppleAppendixHeading"},
+        ],
+        add_table=True,
+        add_header_footer=True,
+    )
+    root = _xml(path, "word/document.xml")
+    body = root.find("w:body", namespaces=NS)
+    assert body is not None
+    table = body.find("w:tbl", namespaces=NS)
+    first_break = body.find("w:p/w:pPr/w:sectPr", namespaces=NS)
+    assert table is not None
+    assert first_break is not None
+    break_paragraph = first_break.getparent().getparent()
+    body.remove(table)
+    body.insert(body.index(break_paragraph), table)
+    _replace_part(path, "word/document.xml", root)
+
+    _set_section_page_number(path, 1, start=None, fmt=None)
+    _set_section_page_number(path, 2, start=1, fmt="decimal")
+    _set_section_page_number(path, 3, start=None, fmt="decimal")
+    header = _xml(path, "word/header1.xml")
+    paragraph = header.find(".//w:p", namespaces=NS)
+    assert paragraph is not None
+    for child in list(paragraph):
+        paragraph.remove(child)
+    for instruction in (
+        " STYLEREF AppleHeading1 ",
+        " STYLEREF AppleAppendixHeading ",
+    ):
+        field = etree.SubElement(paragraph, f"{W}fldSimple")
+        field.set(f"{W}instr", instruction)
+    _replace_part(path, "word/header1.xml", header)
+
+    report = audit_document(path, PROFILE, clock=lambda: NOW)
+    relevant = {
+        finding["rule_id"]
+        for finding in report["findings"]
+        if finding["location"] in {"section:2", "section:3"}
+    }
+
+    assert "HEADER.FOOTER.HEADER_SOURCE" not in relevant
+    assert "HEADER.FOOTER.PAGE_RESET" not in relevant
+    assert "HEADER.FOOTER.PAGE_STYLE" not in relevant
 
 
 @pytest.mark.parametrize(

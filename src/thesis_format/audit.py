@@ -990,7 +990,7 @@ class FieldRule:
                     expected,
                 )
 
-        bookmarks = set(context.semantic.bookmarks)
+        bookmarks = set(context.semantic.all_bookmark_targets)
         for location, occurrence, field in fields:
             match = re.match(r"^(?:REF|PAGEREF)\s+(\S+)", field, re.IGNORECASE)
             if (

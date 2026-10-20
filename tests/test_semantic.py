@@ -18,6 +18,7 @@ from helpers.docx_factory import build_docx, build_minimal_roles_fixture
 ROOT = Path(__file__).parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "minimal-roles.docx"
 PROFILE = load_profile(ROOT / "rules" / "apple-university.yaml")
+NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -205,6 +206,20 @@ def test_explicit_fields_bookmarks_and_numbering_are_enumerated(
     assert caption.bookmarks == ("demo_figure",)
     assert heading.role == "heading_2"
     assert heading.role_source == "explicit_structure"
+
+
+def test_internal_word_bookmarks_are_preserved_as_cross_reference_targets(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "internal-bookmark.docx",
+        [{"text": "Target", "bookmarks": ["public_target", "_Ref123456"]}],
+    )
+
+    document = inspect_document(path, PROFILE)
+
+    assert document.bookmarks == ("public_target",)
+    assert set(document.all_bookmark_targets) == {"public_target", "_Ref123456"}
 
 
 @pytest.mark.parametrize("numbering_level", [0, 1])
@@ -493,6 +508,49 @@ def test_section_start_paragraph_tracks_paragraph_and_final_sectpr(
     )
     sections = inspect_document(path, PROFILE).sections
     assert [section.start_paragraph for section in sections] == [1, 4]
+
+
+def test_section_start_paragraph_counts_table_cell_paragraphs(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "table-before-section-break.docx",
+        [
+            {"text": "Cover", "section_break": True},
+            {"text": "第一章 正文", "style": "AppleHeading1", "section_break": True},
+            {"text": "附录 A", "style": "AppleAppendixHeading"},
+        ],
+        add_table=True,
+    )
+    root = etree.fromstring(ZipFile(path).read("word/document.xml"))
+    body = root.find("w:body", namespaces=NS)
+    assert body is not None
+    table = body.find("w:tbl", namespaces=NS)
+    first_break = body.find("w:p/w:pPr/w:sectPr", namespaces=NS)
+    assert table is not None
+    assert first_break is not None
+    break_paragraph = first_break.getparent().getparent()
+    body.remove(table)
+    body.insert(body.index(break_paragraph), table)
+    replace_zip_part(
+        path,
+        "word/document.xml",
+        etree.tostring(
+            root,
+            xml_declaration=True,
+            encoding="UTF-8",
+            standalone=True,
+        ),
+    )
+
+    document = inspect_document(path, PROFILE)
+
+    assert [section.start_paragraph for section in document.sections] == [1, 5, 7]
+    assert [
+        node.location
+        for node in document.paragraphs
+        if node.role in {"heading_1", "appendix_heading"}
+    ] == ["paragraph:5", "paragraph:7"]
 
 
 def test_ooxml_roundtrip_preserves_unsupported_parts(tmp_path: Path) -> None:
