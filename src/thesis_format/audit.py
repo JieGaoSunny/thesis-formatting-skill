@@ -191,6 +191,22 @@ def _style_role_matches(context: AuditContext, role: str, style_id: str | None) 
     return style_id.casefold() in names
 
 
+def _style_role_for_id(
+    context: AuditContext, style_id: str | None
+) -> str | None:
+    if style_id is None:
+        return None
+    candidate = style_id.casefold()
+    return next(
+        (
+            role
+            for role, style in context.profile.styles.items()
+            if candidate in {name.casefold() for name in style.word_styles}
+        ),
+        None,
+    )
+
+
 def _section_for_paragraph(context: AuditContext, paragraph_number: int) -> int:
     section_number = 1
     for index, section in enumerate(context.semantic.sections, start=1):
@@ -263,6 +279,7 @@ def _style_snapshot(
             "value": None if line is None else round(line / 240, 3),
         }
     return {
+        "style_id": style_id,
         "role": role,
         "paragraph": {
             "alignment": _attr(_latest(chain, "w:pPr/w:jc"), "val"),
@@ -302,7 +319,9 @@ def _float_attr_value(
     return None if value is None else float(value)
 
 
-def _expected_style_snapshot(context: AuditContext, role: str) -> dict[str, object]:
+def _expected_style_snapshot(
+    context: AuditContext, role: str, style_id: str
+) -> dict[str, object]:
     style = context.profile.styles[role]
     spacing = style.paragraph.line_spacing
     line_spacing: dict[str, object] = {"type": spacing.type}
@@ -311,6 +330,7 @@ def _expected_style_snapshot(context: AuditContext, role: str) -> dict[str, obje
     else:
         line_spacing["value"] = spacing.value
     return {
+        "style_id": style_id,
         "role": role,
         "paragraph": {
             "alignment": style.paragraph.alignment,
@@ -466,16 +486,17 @@ class StyleRule:
         checked: set[str] = set()
         available_styles = _style_elements(context)
         for node in context.semantic.paragraphs:
+            role = _style_role_for_id(context, node.style_id)
             if (
-                node.role is None
-                or node.role in checked
-                or not _style_role_matches(context, node.role, node.style_id)
+                role is None
+                or node.style_id is None
+                or node.style_id in checked
                 or node.style_id not in available_styles
             ):
                 continue
-            checked.add(node.role)
-            actual = _style_snapshot(context, node.role, node.style_id)
-            expected = _expected_style_snapshot(context, node.role)
+            checked.add(node.style_id)
+            actual = _style_snapshot(context, role, node.style_id)
+            expected = _expected_style_snapshot(context, role, node.style_id)
             if actual != expected:
                 yield AuditFinding(
                     "STYLE.DEFINITION",
@@ -654,31 +675,43 @@ def _has_caption_numbering(context: AuditContext, node) -> bool:
     )
     if not sequence_fields:
         return False
-    if any(
+    has_restarting_sequence = any(
         re.search(r"\\s\s+1\b", field, re.IGNORECASE)
         for field in sequence_fields
-    ):
-        return True
+    )
     heading_styles = {
         name.casefold() for name in context.profile.styles["heading_1"].word_styles
     }
-    for field in fields:
-        match = re.match(
-            r"^STYLEREF\s+\"?([^\"\\]+?)\"?(?:\s+\\|$)",
-            field,
-            re.IGNORECASE,
+    has_chapter_reference = any(
+        (
+            match := re.match(
+                r"^STYLEREF\s+\"?([^\"\\]+?)\"?(?:\s+\\|$)",
+                field,
+                re.IGNORECASE,
+            )
         )
-        if match and match.group(1).strip().casefold() in heading_styles:
-            return True
-    return False
+        and match.group(1).strip().casefold() in heading_styles
+        for field in fields
+    )
+    return has_restarting_sequence and has_chapter_reference
 
 
 class FieldRule:
     rule_id = "FIELD"
 
     def audit(self, context: AuditContext) -> Iterable[AuditFinding]:
-        fields = _all_fields(context)
-        normalized = tuple(re.sub(r"\s+", " ", code).strip() for _, code in fields)
+        fields = tuple(
+            (node.location, occurrence, field)
+            for node in (
+                *context.semantic.paragraphs,
+                *context.semantic.headers,
+                *context.semantic.footers,
+            )
+            for occurrence, field in enumerate(node.fields, start=1)
+        )
+        normalized = tuple(
+            re.sub(r"\s+", " ", code).strip() for _, _, code in fields
+        )
         required = (
             ("FIELD.TOC.REQUIRED", context.profile.fields.toc.field_code),
             (
@@ -704,7 +737,7 @@ class FieldRule:
                 )
 
         bookmarks = set(context.semantic.bookmarks)
-        for location, field in fields:
+        for location, occurrence, field in fields:
             match = re.match(r"^(?:REF|PAGEREF)\s+(\S+)", field, re.IGNORECASE)
             if match and match.group(1) not in bookmarks:
                 target_digest = hashlib.sha256(
@@ -716,7 +749,10 @@ class FieldRule:
                     location,
                     "Cross-reference target does not exist.",
                     True,
-                    {"missing_target_sha256": target_digest},
+                    {
+                        "field_occurrence": occurrence,
+                        "missing_target_sha256": target_digest,
+                    },
                     "existing bookmark",
                 )
 
@@ -784,6 +820,14 @@ class TableRule:
             for child in context.document_root.find("w:body", namespaces=NS)
             if isinstance(child.tag, str)
         ]
+        semantic_by_paragraph = {
+            id(paragraph): node
+            for paragraph, node in zip(
+                context.paragraph_elements,
+                context.semantic.paragraphs,
+                strict=True,
+            )
+        }
         table_number = 0
         for child_index, table in enumerate(body_children):
             if etree.QName(table).localname != "tbl":
@@ -793,16 +837,10 @@ class TableRule:
             previous = body_children[child_index - 1] if child_index else None
             previous_is_caption = False
             if previous is not None and etree.QName(previous).localname == "p":
-                paragraph_position = sum(
-                    1
-                    for item in body_children[:child_index]
-                    if etree.QName(item).localname == "p"
+                previous_node = semantic_by_paragraph.get(id(previous))
+                previous_is_caption = bool(
+                    previous_node and previous_node.role == "table_caption"
                 )
-                if paragraph_position:
-                    previous_is_caption = (
-                        context.semantic.paragraphs[paragraph_position - 1].role
-                        == "table_caption"
-                    )
             if not previous_is_caption:
                 yield AuditFinding(
                     "TABLE.CAPTION.POSITION",

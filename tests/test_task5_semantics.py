@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from zipfile import ZipFile
 
+import pytest
 from docx import Document
 from lxml import etree
 
@@ -127,6 +129,71 @@ def _set_paragraph_spacing(
     _replace_part(path, "word/document.xml", root)
 
 
+def _set_style_to_profile(path: Path, style_id: str, role: str) -> None:
+    root = _xml(path, "word/styles.xml")
+    style = root.xpath(
+        f"./w:style[@w:styleId='{style_id}']",
+        namespaces=NS,
+    )[0]
+    for name in ("pPr", "rPr"):
+        existing = style.find(f"w:{name}", namespaces=NS)
+        if existing is not None:
+            style.remove(existing)
+
+    expected = PROFILE.styles[role]
+    paragraph = expected.paragraph
+    p_pr = etree.SubElement(style, f"{W}pPr")
+    etree.SubElement(p_pr, f"{W}jc", {f"{W}val": paragraph.alignment})
+    spacing_attributes = {
+        f"{W}before": str(round(paragraph.space_before_pt * 20)),
+        f"{W}after": str(round(paragraph.space_after_pt * 20)),
+    }
+    if paragraph.line_spacing.type == "exact":
+        spacing_attributes.update(
+            {
+                f"{W}line": str(round(paragraph.line_spacing.value_pt * 20)),
+                f"{W}lineRule": "exact",
+            }
+        )
+    else:
+        spacing_attributes.update(
+            {
+                f"{W}line": str(round(paragraph.line_spacing.value * 240)),
+                f"{W}lineRule": "auto",
+            }
+        )
+    etree.SubElement(p_pr, f"{W}spacing", spacing_attributes)
+    etree.SubElement(
+        p_pr,
+        f"{W}ind",
+        {
+            f"{W}firstLineChars": str(round(paragraph.first_line_chars * 100)),
+            f"{W}left": str(round(paragraph.left_indent_mm * 1440 / 25.4)),
+            f"{W}hanging": str(round(paragraph.hanging_indent_mm * 1440 / 25.4)),
+        },
+    )
+    if paragraph.keep_with_next:
+        etree.SubElement(p_pr, f"{W}keepNext")
+    if paragraph.page_break_before:
+        etree.SubElement(p_pr, f"{W}pageBreakBefore")
+
+    run = expected.run
+    r_pr = etree.SubElement(style, f"{W}rPr")
+    etree.SubElement(
+        r_pr,
+        f"{W}rFonts",
+        {
+            f"{W}eastAsia": run.font_zh,
+            f"{W}ascii": run.font_latin,
+            f"{W}hAnsi": run.font_latin,
+        },
+    )
+    etree.SubElement(r_pr, f"{W}sz", {f"{W}val": str(round(run.size_pt * 2))})
+    etree.SubElement(r_pr, f"{W}b", {f"{W}val": "1" if run.bold else "0"})
+    etree.SubElement(r_pr, f"{W}i", {f"{W}val": "1" if run.italic else "0"})
+    _replace_part(path, "word/styles.xml", root)
+
+
 def test_num_id_zero_unrelated_styleref_and_bullet_are_not_heading_numbering(
     tmp_path: Path,
 ) -> None:
@@ -169,45 +236,135 @@ def test_num_id_zero_unrelated_styleref_and_bullet_are_not_heading_numbering(
     assert "NUMBERING.MANUAL_HEADING" in _rule_ids(bullet)
 
 
-def test_caption_requires_chapter_based_automatic_fields_for_figure_and_table(
+@pytest.mark.parametrize(
+    ("role", "style", "label"),
+    [
+        ("figure_caption", "AppleFigureCaption", "Figure"),
+        ("table_caption", "AppleTableCaption", "Table"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("has_styleref", "has_restarting_sequence", "is_automatic"),
+    [
+        (False, False, False),
+        (True, False, False),
+        (False, True, False),
+        (True, True, True),
+    ],
+)
+def test_caption_requires_both_chapter_styleref_and_restarting_sequence(
+    tmp_path: Path,
+    role: str,
+    style: str,
+    label: str,
+    has_styleref: bool,
+    has_restarting_sequence: bool,
+    is_automatic: bool,
+) -> None:
+    fields = []
+    if has_styleref:
+        fields.append(" STYLEREF AppleHeading1 \\n ")
+    if has_restarting_sequence:
+        fields.append(f" SEQ {label} \\s 1 \\* ARABIC ")
+    path = build_docx(
+        tmp_path / f"{role}-{has_styleref}-{has_restarting_sequence}.docx",
+        [
+            {
+                "text": "图 1-1 Hard coded" if label == "Figure" else "表 1-1 Hard coded",
+                "style": style,
+                "fields": fields,
+            },
+        ],
+    )
+
+    rule_ids = _rule_ids(path)
+    assert ("NUMBERING.MANUAL_CAPTION" not in rule_ids) is is_automatic
+
+
+def test_style_definition_audits_each_distinct_used_alias(tmp_path: Path) -> None:
+    path = build_docx(
+        tmp_path / "body-aliases.docx",
+        [
+            {"text": "First body paragraph", "style": "AppleBody"},
+            {"text": "Second body paragraph", "style": "苹果大学正文"},
+        ],
+    )
+    _set_style_to_profile(path, "AppleBody", "body")
+
+    report = audit_document(path, PROFILE, clock=lambda: NOW)
+    findings = [
+        finding
+        for finding in report["findings"]
+        if finding["rule_id"] == "STYLE.DEFINITION"
+    ]
+
+    assert len(findings) == 1
+    assert findings[0]["before"]["style_id"] == "苹果大学正文"
+
+
+def test_table_caption_adjacency_uses_main_story_block_order(
     tmp_path: Path,
 ) -> None:
     path = build_docx(
-        tmp_path / "captions.docx",
+        tmp_path / "multiple-tables.docx",
         [
-            {"text": "Image"},
-            {"text": "图 1-1 Hard coded", "style": "AppleFigureCaption"},
-            {"text": "表 1-1 Hard coded", "style": "AppleTableCaption"},
+            {
+                "text": "表",
+                "style": "AppleTableCaption",
+                "fields": ["STYLEREF AppleHeading1", "SEQ Table \\s 1"],
+            },
+            {
+                "text": "表",
+                "style": "AppleTableCaption",
+                "fields": ["STYLEREF AppleHeading1", "SEQ Table \\s 1"],
+            },
         ],
         add_table=True,
     )
-    _add_drawing(path, 1)
+    root = _xml(path, "word/document.xml")
+    body = root.find("w:body", namespaces=NS)
+    assert body is not None
+    captions = body.findall("w:p", namespaces=NS)
+    table = body.find("w:tbl", namespaces=NS)
+    assert len(captions) == 2
+    assert table is not None
+    body.remove(table)
+    first_caption_index = body.index(captions[0])
+    body.insert(first_caption_index + 1, table)
+    second_caption_index = body.index(captions[1])
+    body.insert(second_caption_index + 1, deepcopy(table))
+    _replace_part(path, "word/document.xml", root)
 
-    assert _rule_ids(path).count("NUMBERING.MANUAL_CAPTION") == 2
-    rule_ids = _rule_ids(path)
-    assert "FIGURE.CAPTION.POSITION" not in rule_ids
-    assert "FIGURE.DIMENSIONS.MAX_WIDTH" in rule_ids
-    assert "FIGURE.ALIGNMENT" in rule_ids
-    assert "TABLE.CAPTION.POSITION" not in rule_ids
-    assert "PAGE.PAPER.SIZE" in rule_ids
-    assert "PAGE.MARGIN.BODY" in rule_ids
-    assert "STYLE.DEFINITION" in rule_ids
-    assert "FIELD.TOC.REQUIRED" in rule_ids
+    assert "TABLE.CAPTION.POSITION" not in _rule_ids(path)
 
-    automatic = build_docx(
-        tmp_path / "automatic-caption.docx",
+
+def test_identical_missing_crossrefs_have_unique_deterministic_findings(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "duplicate-crossrefs.docx",
         [
             {
-                "text": "图",
-                "style": "AppleFigureCaption",
-                "fields": [
-                    " STYLEREF AppleHeading1 \\n ",
-                    " SEQ Figure \\s 1 \\* ARABIC ",
-                ],
+                "text": "Repeated references",
+                "fields": ["REF missing_target", "REF missing_target"],
             }
         ],
     )
-    assert "NUMBERING.MANUAL_CAPTION" not in _rule_ids(automatic)
+
+    first = audit_document(path, PROFILE, clock=lambda: NOW)
+    second = audit_document(path, PROFILE, clock=lambda: NOW)
+    findings = [
+        finding
+        for finding in first["findings"]
+        if finding["rule_id"] == "FIELD.CROSS_REFERENCE.TARGET"
+    ]
+
+    assert len(findings) == 2
+    assert len({finding["finding_id"] for finding in findings}) == 2
+    assert sorted(
+        finding["before"]["field_occurrence"] for finding in findings
+    ) == [1, 2]
+    assert first["findings"] == second["findings"]
 
 
 def test_three_line_table_requires_visible_top_header_bottom_and_bottom(
