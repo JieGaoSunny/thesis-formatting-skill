@@ -106,6 +106,9 @@ def test_skill_documents_test_commands_and_all_installation_paths() -> None:
     text = _skill()
 
     assert "uv run pytest" in text
+    assert "require installed renderer and privacy tooling" in text
+    assert "unavailable renderer blocks compliance" in text
+    assert "unavailable privacy tooling blocks release" in text
     for path in (
         "SKILL.md",
         ".claude/skills/thesis-formatting/SKILL.md",

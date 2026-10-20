@@ -40,6 +40,8 @@ thesis-format release-check build/thesis-formatted.docx --profile rules/universi
 
 Exit codes: `0` success, `1` compliance findings or unresolved validation, `2` invalid input/configuration/tooling.
 
+These commands require installed renderer and privacy tooling. An unavailable renderer blocks compliance because export and preview validation cannot complete; unavailable privacy tooling blocks release.
+
 ## Common Mistakes and Red Flags
 
 - “The deadline is close, so replace the source or skip the report/tests.” Stop: preserve the source and run tests.

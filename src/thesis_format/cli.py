@@ -20,13 +20,52 @@ PreviewFunction = Callable[[Path, Path], Path | Sequence[Path] | None]
 PrivacyFunction = Callable[[Path, Path], Mapping[str, object]]
 
 
+def _default_export_document(
+    source: Path, output: Path
+) -> Path | Sequence[Path] | None:
+    try:
+        from thesis_format.render import export_document
+    except ImportError as error:
+        raise RuntimeError(
+            "optional PDF export tooling is unavailable; install tooling that "
+            "provides thesis_format.render.export_document"
+        ) from error
+    return export_document(source, output)
+
+
+def _default_preview_pdf(
+    source: Path, output_directory: Path
+) -> Path | Sequence[Path] | None:
+    try:
+        from thesis_format.render import preview_pdf
+    except ImportError as error:
+        raise RuntimeError(
+            "optional preview tooling is unavailable; install tooling that "
+            "provides thesis_format.render.preview_pdf"
+        ) from error
+    return preview_pdf(source, output_directory)
+
+
+def _default_release_check(
+    source: Path, profile: Path
+) -> Mapping[str, object]:
+    try:
+        from thesis_format.privacy import release_check
+    except ImportError as error:
+        raise RuntimeError(
+            "optional privacy tooling is unavailable; install tooling that "
+            "provides thesis_format.privacy.release_check"
+        ) from error
+    return release_check(source, profile)
+
+
 @dataclass(frozen=True)
 class CliDependencies:
     """Optional Task 11/12 integrations supplied by callers or tests."""
 
-    export_document: ExportFunction | None = None
-    preview_document: PreviewFunction | None = None
-    privacy_check: PrivacyFunction | None = None
+    export_document: ExportFunction | None = _default_export_document
+    preview_document: PreviewFunction | None = _default_preview_pdf
+    privacy_check: PrivacyFunction | None = _default_release_check
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -76,11 +115,45 @@ def _require_file(path: Path, label: str) -> None:
         raise ValueError(f"{label} does not exist or is not a file: {path}")
 
 
-def _protect_source(source: Path, *destinations: Path | None) -> None:
-    source_path = source.resolve()
-    for destination in destinations:
-        if destination is not None and destination.resolve() == source_path:
-            raise ValueError("source and requested output/report paths must differ")
+def _path_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_dev, stat.st_ino
+
+
+def _reject_path_collisions(
+    *artifacts: tuple[str, Path | None],
+) -> None:
+    requested = [
+        (label, path, path.resolve(), _path_identity(path))
+        for label, path in artifacts
+        if path is not None
+    ]
+    for index, (left_label, left, left_resolved, left_identity) in enumerate(
+        requested
+    ):
+        for (
+            right_label,
+            right,
+            right_resolved,
+            right_identity,
+        ) in requested[index + 1 :]:
+            same_resolved_path = left_resolved == right_resolved
+            same_inode = (
+                left_identity is not None
+                and right_identity is not None
+                and left_identity == right_identity
+            )
+            try:
+                same_file = left.samefile(right)
+            except OSError:
+                same_file = False
+            if same_resolved_path or same_inode or same_file:
+                raise ValueError(
+                    f"{left_label} and {right_label} paths must differ"
+                )
 
 
 def _write_text(path: Path, content: str) -> None:
@@ -99,7 +172,11 @@ def _is_unresolved(report: Mapping[str, object]) -> bool:
 def _run_audit(args: argparse.Namespace) -> int:
     _require_file(args.source, "input")
     _require_file(args.profile, "profile")
-    _protect_source(args.source, args.report, args.markdown)
+    _reject_path_collisions(
+        ("source", args.source),
+        ("report", args.report),
+        ("markdown report", args.markdown),
+    )
     profile = load_profile(args.profile)
     report = audit_document(args.source, profile)
     _write_text(args.report, canonical_json(report))
@@ -111,7 +188,11 @@ def _run_audit(args: argparse.Namespace) -> int:
 def _run_format(args: argparse.Namespace) -> int:
     _require_file(args.source, "input")
     _require_file(args.profile, "profile")
-    _protect_source(args.source, args.output, args.report)
+    _reject_path_collisions(
+        ("source", args.source),
+        ("output", args.output),
+        ("report", args.report),
+    )
     profile = load_profile(args.profile)
     report = format_document(args.source, args.output, profile)
     print(args.output)
@@ -129,11 +210,11 @@ def _run_format(args: argparse.Namespace) -> int:
 
 def _run_export(args: argparse.Namespace, function: ExportFunction | None) -> int:
     _require_file(args.source, "input")
-    _protect_source(args.source, args.output)
+    _reject_path_collisions(("source", args.source), ("output", args.output))
     if function is None:
         raise RuntimeError(
-            "PDF export tooling is unavailable until Task 11; "
-            "inject export_document to enable this command"
+            "optional PDF export tooling is unavailable; install tooling that "
+            "provides thesis_format.render.export_document"
         )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     function(args.source, args.output)
@@ -143,10 +224,14 @@ def _run_export(args: argparse.Namespace, function: ExportFunction | None) -> in
 
 def _run_preview(args: argparse.Namespace, function: PreviewFunction | None) -> int:
     _require_file(args.source, "input")
+    _reject_path_collisions(
+        ("source", args.source),
+        ("preview output", args.output_directory),
+    )
     if function is None:
         raise RuntimeError(
-            "preview rendering tooling is unavailable until Task 11; "
-            "inject preview_document to enable this command"
+            "optional preview tooling is unavailable; install tooling that "
+            "provides thesis_format.render.preview_pdf"
         )
     function(args.source, args.output_directory)
     print(args.output_directory)
@@ -158,11 +243,11 @@ def _run_release_check(
 ) -> int:
     _require_file(args.source, "input")
     _require_file(args.profile, "profile")
-    _protect_source(args.source, args.report)
+    _reject_path_collisions(("source", args.source), ("report", args.report))
     if function is None:
         raise RuntimeError(
-            "privacy release-check tooling is unavailable until Task 12; "
-            "inject privacy_check to enable this command"
+            "optional privacy tooling is unavailable; install tooling that "
+            "provides thesis_format.privacy.release_check"
         )
     report = function(args.source, args.profile)
     _write_text(args.report, canonical_json(report))

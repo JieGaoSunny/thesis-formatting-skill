@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -139,6 +140,87 @@ def test_format_rejects_source_as_output_without_modifying_it(
     assert "must differ" in result.stderr
 
 
+@pytest.mark.parametrize("alias_kind", ("hardlink", "symlink"))
+def test_format_rejects_source_alias_as_output_before_writing(
+    tmp_path: Path,
+    alias_kind: str,
+) -> None:
+    source = tmp_path / "source.docx"
+    source.write_bytes(FIXTURE.read_bytes())
+    before = source.read_bytes()
+    output = tmp_path / "formatted.docx"
+    if alias_kind == "hardlink":
+        output.hardlink_to(source)
+    else:
+        output.symlink_to(source)
+    report = tmp_path / "transformation.json"
+
+    result = cli.main(
+        [
+            "format",
+            str(source),
+            "--profile",
+            str(PROFILE),
+            "--output",
+            str(output),
+            "--report",
+            str(report),
+        ]
+    )
+
+    assert result == 2
+    assert source.read_bytes() == before
+    assert not report.exists()
+
+
+@pytest.mark.parametrize("alias_kind", ("hardlink", "symlink"))
+def test_format_rejects_output_report_alias_before_writing(
+    tmp_path: Path,
+    alias_kind: str,
+) -> None:
+    source = tmp_path / "source.docx"
+    source.write_bytes(FIXTURE.read_bytes())
+    output = tmp_path / "formatted.docx"
+    output.write_bytes(b"existing artifact")
+    report = tmp_path / "transformation.json"
+    if alias_kind == "hardlink":
+        report.hardlink_to(output)
+    else:
+        report.symlink_to(output)
+
+    result = cli.main(
+        [
+            "format",
+            str(source),
+            "--profile",
+            str(PROFILE),
+            "--output",
+            str(output),
+            "--report",
+            str(report),
+        ]
+    )
+
+    assert result == 2
+    assert output.read_bytes() == b"existing artifact"
+    assert report.read_bytes() == b"existing artifact"
+
+
+def test_collision_guard_rejects_resolved_report_manifest_alias(
+    tmp_path: Path,
+) -> None:
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    alias = tmp_path / "reports-alias"
+    alias.symlink_to(reports, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="report.*manifest"):
+        cli._reject_path_collisions(
+            ("report", reports / "render.json"),
+            ("manifest", alias / "render.json"),
+        )
+
+
 def test_missing_input_is_invalid_input_exit_2(tmp_path: Path) -> None:
     result = subprocess.run(
         [
@@ -163,8 +245,16 @@ def test_missing_input_is_invalid_input_exit_2(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("command", "arguments", "message"),
     (
-        ("export", ("input.docx", "--output", "output.pdf"), "Task 11"),
-        ("preview", ("input.docx", "--output-dir", "preview"), "Task 11"),
+        (
+            "export",
+            ("input.docx", "--output", "output.pdf"),
+            "thesis_format.render.export_document",
+        ),
+        (
+            "preview",
+            ("input.docx", "--output-dir", "preview"),
+            "thesis_format.render.preview_pdf",
+        ),
         (
             "release-check",
             (
@@ -174,11 +264,11 @@ def test_missing_input_is_invalid_input_exit_2(tmp_path: Path) -> None:
                 "--report",
                 "privacy.json",
             ),
-            "Task 12",
+            "thesis_format.privacy.release_check",
         ),
     ),
 )
-def test_deferred_commands_report_clear_tooling_errors(
+def test_missing_optional_tools_report_clear_exit_2_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -194,6 +284,64 @@ def test_deferred_commands_report_clear_tooling_errors(
 
     assert result == 2
     assert message in capsys.readouterr().err
+
+
+def test_default_optional_tool_wrappers_lazy_import_and_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "input.docx"
+    profile = tmp_path / "profile.yaml"
+    source.write_bytes(b"docx")
+    profile.write_text("unused", encoding="utf-8")
+    calls: list[tuple[str, tuple[Path, ...]]] = []
+
+    render = ModuleType("thesis_format.render")
+
+    def export_document(document: Path, output: Path) -> Path:
+        calls.append(("export", (document, output)))
+        output.write_bytes(b"pdf")
+        return output
+
+    def preview_pdf(document: Path, output_directory: Path) -> list[Path]:
+        calls.append(("preview", (document, output_directory)))
+        output_directory.mkdir()
+        return []
+
+    render.export_document = export_document  # type: ignore[attr-defined]
+    render.preview_pdf = preview_pdf  # type: ignore[attr-defined]
+    privacy = ModuleType("thesis_format.privacy")
+
+    def release_check(document: Path, profile_path: Path) -> dict[str, object]:
+        calls.append(("privacy", (document, profile_path)))
+        return {"summary": {"errors": 0, "violations": 0}}
+
+    privacy.release_check = release_check  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "thesis_format.render", render)
+    monkeypatch.setitem(sys.modules, "thesis_format.privacy", privacy)
+
+    pdf = tmp_path / "output.pdf"
+    preview_dir = tmp_path / "preview"
+    privacy_report = tmp_path / "privacy.json"
+    assert cli.main(["export", str(source), "--output", str(pdf)]) == 0
+    assert (
+        cli.main(["preview", str(source), "--output-dir", str(preview_dir)]) == 0
+    )
+    assert (
+        cli.main(
+            [
+                "release-check",
+                str(source),
+                "--profile",
+                str(profile),
+                "--report",
+                str(privacy_report),
+            ]
+        )
+        == 0
+    )
+
+    assert [name for name, _ in calls] == ["export", "preview", "privacy"]
 
 
 def test_export_preview_and_release_check_use_injected_functions(
