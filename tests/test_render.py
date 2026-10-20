@@ -29,13 +29,13 @@ ROOT = Path(__file__).parents[1]
 BASELINE = ROOT / "tests" / "fixtures" / "render" / "baseline.json"
 SOFFICE = Path("/opt/homebrew/bin/soffice")
 CANONICAL_IMAGE_DIGEST = (
-    "sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba"
+    "sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79"
 )
 CANONICAL_IMAGE_REFERENCE = (
     "ghcr.io/jiegaosunny/thesis-formatting-skill-render@"
     f"{CANONICAL_IMAGE_DIGEST}"
 )
-CANONICAL_SOURCE_COMMIT = "a" * 40
+CANONICAL_SOURCE_COMMIT = "9e29b0eb77a4749e330fac4902be10597330ce92"
 DEBIAN_SNAPSHOT = "20250203T000000Z"
 FONT_QUERIES = ["Liberation Serif", "Noto Serif CJK SC"]
 SOFFICE_VERSION = "LibreOffice 24.2.7.2 actual-build"
@@ -357,10 +357,10 @@ def test_render_environment_marks_rebuild_pending_and_defines_attestation() -> N
     assert environment["renderer"]["local_detected_version"].startswith(
         "LibreOffice "
     )
-    assert environment["canonical_container_status"] == "pending-rebuild"
+    assert environment["canonical_container_status"] == "published-pinned"
     assert environment["canonical_image_digest"] == CANONICAL_IMAGE_DIGEST
     assert environment["canonical_image_reference"] == CANONICAL_IMAGE_REFERENCE
-    assert environment["canonical_source_commit"] == "PENDING_REBUILD"
+    assert environment["canonical_source_commit"] == CANONICAL_SOURCE_COMMIT
     assert environment["canonical_build_inputs"] == {
         "debian_snapshot": DEBIAN_SNAPSHOT,
         "font_queries": FONT_QUERIES,

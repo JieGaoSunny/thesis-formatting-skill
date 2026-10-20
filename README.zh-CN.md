@@ -10,15 +10,14 @@
 
 ## 渲染器身份
 
-规范镜像目前等待重建。仓库中的环境配置将
-`canonical_source_commit` 设为 `"PENDING_REBUILD"`，因此在工作流构建新镜像并同时
-更新提交与摘要之前，规范模式会按设计失败。此前的调用方式为：
+规范镜像由源码提交
+`9e29b0eb77a4749e330fac4902be10597330ce92` 构建：
 
 ```bash
 docker run --rm \
-  -e THESIS_RENDER_IMAGE_DIGEST=sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba \
+  -e THESIS_RENDER_IMAGE_DIGEST=sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79 \
   -v "$PWD/render-environment.json:/app/render-environment.json:ro" \
-  ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba ...
+  ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79 ...
 ```
 
 规范模式会校验固定且由 root 拥有的

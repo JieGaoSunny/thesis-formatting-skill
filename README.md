@@ -13,16 +13,14 @@ Figure generation requires a verified CJK font: pass `font_path`, set
 
 ## Renderer identity
 
-Canonical publication is pending an image rebuild. The checked-in environment
-uses `canonical_source_commit: "PENDING_REBUILD"`, so canonical mode
-intentionally fails until the workflow-built image commit and digest are
-repinned together. The previous invocation was:
+Canonical publication uses the image built from source commit
+`9e29b0eb77a4749e330fac4902be10597330ce92`:
 
 ```bash
 docker run --rm \
-  -e THESIS_RENDER_IMAGE_DIGEST=sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba \
+  -e THESIS_RENDER_IMAGE_DIGEST=sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79 \
   -v "$PWD/render-environment.json:/app/render-environment.json:ro" \
-  ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba ...
+  ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79 ...
 ```
 
 Canonical mode verifies the fixed, root-owned
