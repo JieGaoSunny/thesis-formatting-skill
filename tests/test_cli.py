@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
 
@@ -634,6 +635,8 @@ def test_export_rejects_noncanonical_manifest_by_default(
 
     assert result == 2
     assert "noncanonical" in capsys.readouterr().err
+    assert not output.exists()
+    assert not manifest.exists()
 
 
 def test_export_allows_explicit_noncanonical_development_manifest_with_warning(
@@ -668,6 +671,8 @@ def test_export_allows_explicit_noncanonical_development_manifest_with_warning(
     assert "WARNING" in captured.err
     assert "noncanonical" in captured.err
     assert "development" in captured.err
+    assert output.is_file()
+    assert manifest.is_file()
 
 
 def test_export_accepts_canonical_manifest_without_warning(
@@ -997,8 +1002,59 @@ def test_export_rejects_invalid_returned_render_manifest(
     captured = capsys.readouterr()
     assert result == 2
     assert str(output) not in captured.out
-    assert output.read_bytes() == b"pdf"
-    assert manifest.read_text(encoding="utf-8") == "{}"
+    assert not output.exists()
+    assert not manifest.exists()
+
+
+@pytest.mark.parametrize("competing_destination", ("pdf", "manifest"))
+@pytest.mark.parametrize("replacement_method", ("replace", "rewrite"))
+def test_export_rejection_preserves_racing_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    competing_destination: str,
+    replacement_method: str,
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+    competitor = b"competitor replacement"
+
+    def provider(
+        _source: Path, requested_output: Path, requested_manifest: Path
+    ) -> list[Path]:
+        requested_output.write_bytes(b"published pdf")
+        requested_manifest.write_text("{}", encoding="utf-8")
+        return [requested_output, requested_manifest]
+
+    real_validate = cli._validate_render_manifest_file
+
+    def validate_with_race(path: Path) -> Mapping[str, object]:
+        destination = output if competing_destination == "pdf" else manifest
+        if replacement_method == "replace":
+            destination.unlink()
+        destination.write_bytes(competitor)
+        return real_validate(path)
+
+    monkeypatch.setattr(cli, "_validate_render_manifest_file", validate_with_race)
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
+        dependencies=cli.CliDependencies(export_document=provider),
+    )
+
+    destination = output if competing_destination == "pdf" else manifest
+    other = manifest if competing_destination == "pdf" else output
+    assert result == 2
+    assert destination.read_bytes() == competitor
+    assert not other.exists()
 
 
 def test_export_rejects_arbitrary_text_manifest(
@@ -1032,6 +1088,8 @@ def test_export_rejects_arbitrary_text_manifest(
     captured = capsys.readouterr()
     assert result == 2
     assert str(output) not in captured.out
+    assert not output.exists()
+    assert not manifest.exists()
 
 
 def test_export_accepts_valid_json_text_manifest(tmp_path: Path) -> None:
@@ -1106,6 +1164,8 @@ def test_export_rejects_manifest_hash_mismatch(
     captured = capsys.readouterr()
     assert result == 2
     assert str(output) not in captured.out
+    assert not output.exists()
+    assert not manifest.exists()
 
 
 def test_export_rejects_truncated_pdf(

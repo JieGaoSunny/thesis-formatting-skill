@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,6 +73,13 @@ class CliDependencies:
     export_document: ExportFunction | None = _default_export_document
     preview_document: PreviewFunction | None = _default_preview_pdf
     privacy_check: PrivacyFunction | None = _default_release_check
+
+
+@dataclass(frozen=True)
+class _ArtifactIdentity:
+    device: int
+    inode: int
+    sha256: str
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -282,6 +290,47 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _capture_artifact_identity(path: Path) -> _ArtifactIdentity | None:
+    try:
+        before = path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode):
+            return None
+        sha256 = _sha256_file(path)
+        after = path.stat(follow_symlinks=False)
+    except OSError:
+        return None
+    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+        return None
+    return _ArtifactIdentity(before.st_dev, before.st_ino, sha256)
+
+
+def _remove_exact_artifact(
+    path: Path, expected: _ArtifactIdentity | None
+) -> None:
+    if expected is None:
+        return
+    try:
+        before = path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode):
+            return
+        if (before.st_dev, before.st_ino) != (
+            expected.device,
+            expected.inode,
+        ):
+            return
+        if _sha256_file(path) != expected.sha256:
+            return
+        after = path.stat(follow_symlinks=False)
+        if (after.st_dev, after.st_ino) != (
+            expected.device,
+            expected.inode,
+        ):
+            return
+        path.unlink()
+    except OSError:
+        return
+
+
 def _validate_returned_artifacts(paths: Sequence[Path]) -> None:
     for path in paths:
         _require_nonempty_regular_file(path, "provider artifact")
@@ -355,35 +404,43 @@ def _run_export(args: argparse.Namespace, function: ExportFunction | None) -> in
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     _require_missing(args.output, "PDF output")
     _require_missing(args.manifest, "render manifest")
-    returned_paths = _provider_paths(
-        function(args.source, args.output, args.manifest)
-    )
-    _require_nonempty_regular_file(args.output, "PDF output")
-    manifest = _validate_render_manifest_file(args.manifest)
-    actual_pdf_sha256 = _sha256_file(args.output)
-    expected_pdf_sha256 = manifest["raw_pdf_sha256"]
-    if actual_pdf_sha256 != expected_pdf_sha256:
-        raise ValueError(
-            "PDF output SHA-256 does not match render manifest "
-            f"raw_pdf_sha256: {args.output}"
-        )
-    if not _is_canonical_render_manifest(manifest):
-        if not args.allow_noncanonical:
+    provider_result = function(args.source, args.output, args.manifest)
+    published = {
+        args.output: _capture_artifact_identity(args.output),
+        args.manifest: _capture_artifact_identity(args.manifest),
+    }
+    try:
+        returned_paths = _provider_paths(provider_result)
+        _require_nonempty_regular_file(args.output, "PDF output")
+        manifest = _validate_render_manifest_file(args.manifest)
+        actual_pdf_sha256 = _sha256_file(args.output)
+        expected_pdf_sha256 = manifest["raw_pdf_sha256"]
+        if actual_pdf_sha256 != expected_pdf_sha256:
             raise ValueError(
-                "noncanonical render manifest rejected; use "
-                "--allow-noncanonical only for explicit local development"
+                "PDF output SHA-256 does not match render manifest "
+                f"raw_pdf_sha256: {args.output}"
             )
-        _warn_noncanonical(
-            "accepting noncanonical render manifest for development only; "
-            "it is not suitable for compliance or publication"
+        if not _is_canonical_render_manifest(manifest):
+            if not args.allow_noncanonical:
+                raise ValueError(
+                    "noncanonical render manifest rejected; use "
+                    "--allow-noncanonical only for explicit local development"
+                )
+            _warn_noncanonical(
+                "accepting noncanonical render manifest for development only; "
+                "it is not suitable for compliance or publication"
+            )
+        _validate_returned_artifacts(
+            tuple(
+                path
+                for path in returned_paths
+                if path not in {args.output, args.manifest}
+            )
         )
-    _validate_returned_artifacts(
-        tuple(
-            path
-            for path in returned_paths
-            if path not in {args.output, args.manifest}
-        )
-    )
+    except (OSError, RuntimeError, ValueError):
+        for path, identity in published.items():
+            _remove_exact_artifact(path, identity)
+        raise
     print(args.output)
     return 0
 
