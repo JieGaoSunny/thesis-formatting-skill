@@ -1,10 +1,10 @@
 # Thesis formatting audit
 
 - Profile: `apple-university-thesis`
-- Document SHA-256: `a035c71c32a2515bf6a64cb494bb36aec9c3fc9a67e5f72cfacdee4166d8e395`
+- Document SHA-256: `7c0062884a840c70c3f5e4a6080b03ca057be3519d08a95253e6388a738767ce`
 - Errors: 0
 - Violations: 29
-- Warnings: 346
+- Warnings: 314
 
 | Severity | Rule | Location | Message | Before | After |
 |---|---|---|---|---|---|
@@ -31,31 +31,28 @@
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:6` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:8` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:9` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:11` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:13` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:15` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:17` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | violation | `NUMBERING.MANUAL_HEADING` | `paragraph:19` | Heading number is typed manually instead of generated. | 第一章 | automatic numbering |
 | warning | `STYLE.DIRECT_FORMATTING` | `paragraph:19` | Direct formatting may override the selected profile style. | {"paragraph_properties":0,"run_properties":1} | {"paragraph_properties":0,"run_properties":0} |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:20` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:21` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| violation | `STYLE.ROLE.MAPPING` | `paragraph:22` | Paragraph does not use the profile style for its semantic role. | UnreliableHeading | ["AppleHeading2","苹果大学标题2"] |
+| violation | `STYLE.ROLE.MAPPING` | `paragraph:21` | Paragraph does not use the profile style for its semantic role. | UnreliableHeading | ["AppleHeading2","苹果大学标题2"] |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:22` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:23` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:24` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:25` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:27` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:26` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:28` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:29` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:31` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:32` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:33` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:35` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:36` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:34` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| violation | `FIGURE.CAPTION.POSITION` | `paragraph:36` | Figure must have a caption immediately below it. | false | caption below |
+| violation | `FIGURE.DIMENSIONS.MAX_WIDTH` | `paragraph:36` | Figure exceeds the maximum profile width. | 180 | 150 |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:38` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:39` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:40` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| violation | `FIGURE.CAPTION.POSITION` | `paragraph:42` | Figure must have a caption immediately below it. | false | caption below |
-| violation | `FIGURE.DIMENSIONS.MAX_WIDTH` | `paragraph:42` | Figure exceeds the maximum profile width. | 180 | 150 |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:41` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:42` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:43` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:44` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:45` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:46` | Paragraph role is ambiguous and requires review. | ambiguous | — |
@@ -71,68 +68,67 @@
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:56` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:57` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:58` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:59` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:60` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:61` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:62` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:63` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:64` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:66` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:67` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:68` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:69` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:71` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:72` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:73` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:74` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:75` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:76` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:77` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:78` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:79` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:80` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:81` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:82` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:83` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:84` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:85` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:86` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:87` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:88` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:89` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:90` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:91` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:92` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:93` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:94` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:95` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:96` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:97` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:98` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:99` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:100` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:101` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:102` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:104` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:103` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:105` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:106` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:107` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:109` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:110` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:111` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:112` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:114` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:115` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| violation | `REFERENCE.PARAGRAPH_FORMAT` | `paragraph:108` | Reference spacing or hanging indent does not match the profile. | {"hanging_indent_mm":0,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} | {"hanging_indent_mm":10,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} |
+| violation | `REFERENCE.PARAGRAPH_FORMAT` | `paragraph:109` | Reference spacing or hanging indent does not match the profile. | {"hanging_indent_mm":0,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} | {"hanging_indent_mm":10,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} |
+| violation | `REFERENCE.PARAGRAPH_FORMAT` | `paragraph:110` | Reference spacing or hanging indent does not match the profile. | {"hanging_indent_mm":0,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} | {"hanging_indent_mm":10,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} |
+| violation | `REFERENCE.PARAGRAPH_FORMAT` | `paragraph:111` | Reference spacing or hanging indent does not match the profile. | {"hanging_indent_mm":0,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} | {"hanging_indent_mm":10,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} |
+| violation | `REFERENCE.PARAGRAPH_FORMAT` | `paragraph:112` | Reference spacing or hanging indent does not match the profile. | {"hanging_indent_mm":0,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} | {"hanging_indent_mm":10,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} |
+| violation | `REFERENCE.PARAGRAPH_FORMAT` | `paragraph:113` | Reference spacing or hanging indent does not match the profile. | {"hanging_indent_mm":0,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} | {"hanging_indent_mm":10,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:116` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:117` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:118` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:119` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:120` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:121` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:122` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:123` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:124` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:125` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:126` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:127` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| violation | `REFERENCE.PARAGRAPH_FORMAT` | `paragraph:130` | Reference spacing or hanging indent does not match the profile. | {"hanging_indent_mm":0,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} | {"hanging_indent_mm":10,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} |
-| violation | `REFERENCE.PARAGRAPH_FORMAT` | `paragraph:131` | Reference spacing or hanging indent does not match the profile. | {"hanging_indent_mm":0,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} | {"hanging_indent_mm":10,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} |
-| violation | `REFERENCE.PARAGRAPH_FORMAT` | `paragraph:132` | Reference spacing or hanging indent does not match the profile. | {"hanging_indent_mm":0,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} | {"hanging_indent_mm":10,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} |
-| violation | `REFERENCE.PARAGRAPH_FORMAT` | `paragraph:133` | Reference spacing or hanging indent does not match the profile. | {"hanging_indent_mm":0,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} | {"hanging_indent_mm":10,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} |
-| violation | `REFERENCE.PARAGRAPH_FORMAT` | `paragraph:134` | Reference spacing or hanging indent does not match the profile. | {"hanging_indent_mm":0,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} | {"hanging_indent_mm":10,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} |
-| violation | `REFERENCE.PARAGRAPH_FORMAT` | `paragraph:135` | Reference spacing or hanging indent does not match the profile. | {"hanging_indent_mm":0,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} | {"hanging_indent_mm":10,"line_spacing":{"type":"exact","value_pt":16},"space_after_pt":0,"space_before_pt":0} |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:128` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:129` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:130` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:131` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:132` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:133` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:134` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:135` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:136` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:137` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:138` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:139` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:140` | Paragraph role is ambiguous and requires review. | ambiguous | — |
@@ -140,8 +136,8 @@
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:142` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:143` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:144` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:145` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:146` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:147` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:148` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:149` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:150` | Paragraph role is ambiguous and requires review. | ambiguous | — |
@@ -167,6 +163,7 @@
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:170` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:171` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:172` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:173` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:174` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:175` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:176` | Paragraph role is ambiguous and requires review. | ambiguous | — |
@@ -330,7 +327,6 @@
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:334` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:335` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:336` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:337` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:338` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:339` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:340` | Paragraph role is ambiguous and requires review. | ambiguous | — |
@@ -348,36 +344,8 @@
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:352` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:353` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:354` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:355` | Paragraph role is ambiguous and requires review. | ambiguous | — |
+| warning | `STYLE.DIRECT_FORMATTING` | `paragraph:355` | Direct formatting may override the selected profile style. | {"paragraph_properties":1,"run_properties":0} | {"paragraph_properties":0,"run_properties":0} |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:356` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:357` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:358` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:359` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:360` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:361` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:362` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:363` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:364` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:366` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:367` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:368` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:369` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:370` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:371` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:372` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:373` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:374` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:375` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:376` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:377` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:378` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:379` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:380` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:381` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:382` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `STYLE.DIRECT_FORMATTING` | `paragraph:383` | Direct formatting may override the selected profile style. | {"paragraph_properties":1,"run_properties":0} | {"paragraph_properties":0,"run_properties":0} |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:384` | Paragraph role is ambiguous and requires review. | ambiguous | — |
-| warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:385` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | violation | `TABLE.BORDERS.THREE_LINE` | `table:1` | Table does not use the required three-line border model. | other | three_line |
 | violation | `TABLE.REPEAT_HEADER` | `table:1` | Table header row is not configured to repeat. | false | true |
 | violation | `TABLE.ROW_SPLIT` | `table:1` | Table rows are allowed to split across pages. | 4 | 0 |

@@ -949,6 +949,49 @@ def test_required_apple_university_values_are_clean_where_identity_fields_exist(
     assert not any(rule.startswith("PRIVACY.IDENTITY.") for rule in _rules(report))
 
 
+def test_exact_fictional_identity_values_are_allowed_before_generic_patterns(
+    tmp_path: Path,
+) -> None:
+    profile = yaml.safe_load(PROFILE.read_text(encoding="utf-8"))
+    profile["privacy"]["generic_patterns"].append(
+        {
+            "id": "fictional-identities",
+            "regex": "Apple University|艾苹|APPLE-0001|林果教授",
+            "flags": "iu",
+        }
+    )
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text(
+        yaml.safe_dump(profile, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    source = tmp_path / "thesis.txt"
+    source.write_text(
+        "Institution: Apple University\n"
+        "作者: 艾苹\n"
+        "Student ID: APPLE-0001\n"
+        "Adviser: 林果教授\n",
+        encoding="utf-8",
+    )
+
+    report = release_check(source, profile_path, DENYLIST)
+
+    assert report["summary"]["errors"] == 0  # type: ignore[index]
+    assert not report["findings"]
+
+
+@pytest.mark.integration
+def test_committed_examples_pass_release_check_with_profile_and_denylist() -> None:
+    report = release_check(ROOT / "examples", PROFILE, DENYLIST)
+
+    assert report["summary"] == {
+        "errors": 0,
+        "violations": 0,
+        "warnings": 0,
+    }
+    assert not report["findings"]
+
+
 def test_private_values_never_leak_in_report_markdown_or_cli_streams(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

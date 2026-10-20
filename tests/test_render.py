@@ -68,6 +68,36 @@ def _make_pdf(path: Path, *, pages: int = 3) -> None:
     document.close()
 
 
+def test_pdf_privacy_scrub_removes_docinfo_and_xmp(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "output.pdf"
+    _make_pdf(source, pages=1)
+    with pikepdf.open(source, allow_overwriting_input=True) as document:
+        document.docinfo["/Author"] = "艾苹"
+        document.docinfo["/Creator"] = "Writer"
+        document.docinfo["/Producer"] = "LibreOffice"
+        with document.open_metadata(
+            set_pikepdf_as_editor=False,
+            update_docinfo=False,
+        ) as metadata:
+            metadata["dc:creator"] = ["艾苹"]
+            metadata["xmp:CreatorTool"] = "Writer"
+            metadata["pdf:Producer"] = "LibreOffice"
+        document.save(source)
+
+    render._scrub_pdf_metadata(source, output)
+
+    with pikepdf.open(output) as document:
+        assert not document.docinfo
+        assert "/Metadata" not in document.Root
+    with fitz.open(output) as document:
+        assert all(
+            not value
+            for key, value in document.metadata.items()
+            if key in {"author", "creator", "producer"}
+        )
+
+
 def _add_destinations(path: Path, destinations: list[tuple[str, int]]) -> None:
     with pikepdf.open(path, allow_overwriting_input=True) as pdf:
         names = pikepdf.Array()

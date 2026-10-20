@@ -572,6 +572,33 @@ def _run_soffice(
         raise RenderError(f"LibreOffice rendering failed: {detail}") from error
 
 
+def _local_fontconfig_file() -> Path | None:
+    configured = os.environ.get("FONTCONFIG_FILE")
+    if configured:
+        path = Path(configured).expanduser()
+        return path if path.is_file() else None
+    for candidate in (
+        Path("/opt/homebrew/etc/fonts/fonts.conf"),
+        Path("/usr/local/etc/fonts/fonts.conf"),
+        Path("/etc/fonts/fonts.conf"),
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _scrub_pdf_metadata(source: Path, destination: Path) -> None:
+    try:
+        with pikepdf.open(source) as pdf:
+            for key in list(pdf.docinfo.keys()):
+                del pdf.docinfo[key]
+            if "/Metadata" in pdf.Root:
+                del pdf.Root.Metadata
+            pdf.save(destination)
+    except (OSError, pikepdf.PdfError) as error:
+        raise RenderError("could not scrub PDF metadata") from error
+
+
 def _detect_soffice_version(environment: Mapping[str, Any]) -> str:
     soffice = str(
         environment.get("soffice_path") or shutil.which("soffice") or "soffice"
@@ -817,12 +844,14 @@ def export_document(
         process_environment = os.environ.copy()
         process_environment.update(
             {
-                "HOME": str(work / "home"),
                 "LANG": str(selected_environment["locale"]),
                 "LC_ALL": str(selected_environment["locale"]),
                 "TZ": str(selected_environment.get("timezone", "UTC")),
             }
         )
+        fontconfig_file = _local_fontconfig_file()
+        if fontconfig_file is not None:
+            process_environment["FONTCONFIG_FILE"] = str(fontconfig_file)
         profile_argument = (
             f"-env:UserInstallation={profile_dir.resolve().as_uri()}"
         )
@@ -870,7 +899,7 @@ def export_document(
         generated = pdf_dir / f"{refreshed.stem}.pdf"
         if not generated.is_file() or generated.stat().st_size == 0:
             raise RenderError("LibreOffice produced no PDF")
-        os.replace(generated, temporary_pdf)
+        _scrub_pdf_metadata(generated, temporary_pdf)
         staged_pdf = _open_staged_artifact(temporary_pdf)
         staged_artifacts.append(staged_pdf)
         manifest = inspect_pdf(

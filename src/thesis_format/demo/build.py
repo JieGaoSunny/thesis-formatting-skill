@@ -427,7 +427,7 @@ def _add_field_page(
     if bookmark_name:
         _bookmark(heading, bookmark_name, bookmark_id)
     field_paragraph = document.add_paragraph()
-    _field(field_paragraph, instruction, "更新字段后显示")
+    _field(field_paragraph, instruction)
 
 
 def _caption_fields(paragraph, label: str) -> None:
@@ -487,8 +487,12 @@ def _three_line_table(
         paragraph = cell.paragraphs[0]
         paragraph.style = profile.styles.table_body.word_styles[0]
         if compact:
-            paragraph.paragraph_format.line_spacing = Pt(11)
-        paragraph.add_run(value)
+            paragraph.paragraph_format.line_spacing = Pt(8.5)
+            paragraph.paragraph_format.space_before = Pt(0)
+            paragraph.paragraph_format.space_after = Pt(0)
+        run = paragraph.add_run(value)
+        if compact:
+            run.font.size = Pt(7.5)
         tc_borders = OxmlElement("w:tcBorders")
         bottom = OxmlElement("w:bottom")
         bottom.set(qn("w:val"), "single")
@@ -506,8 +510,12 @@ def _three_line_table(
             paragraph = cell.paragraphs[0]
             paragraph.style = profile.styles.table_body.word_styles[0]
             if compact:
-                paragraph.paragraph_format.line_spacing = Pt(11)
-            paragraph.add_run(value)
+                paragraph.paragraph_format.line_spacing = Pt(8.5)
+                paragraph.paragraph_format.space_before = Pt(0)
+                paragraph.paragraph_format.space_after = Pt(0)
+            run = paragraph.add_run(value)
+            if compact:
+                run.font.size = Pt(7.5)
     if table_model.note:
         _styled(document, table_model.note, profile, "source_note")
     return table
@@ -745,7 +753,6 @@ def build_thesis(
     acknowledgements = _styled(document, "致谢", selected, "front_heading")
     acknowledgements.paragraph_format.page_break_before = False
     _styled(document, model.acknowledgements, selected, "body")
-    _styled(document, model.data_disclosure, selected, "body")
 
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)

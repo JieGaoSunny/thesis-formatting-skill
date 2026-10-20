@@ -91,7 +91,7 @@ def test_demo_thesis_has_renderable_structure_and_volume() -> None:
     assert len(thesis.tables) >= 2
     assert thesis.appendix.paragraphs
     assert len(thesis.acknowledgements) >= 120
-    assert len(all_text) >= 10_000
+    assert len(all_text) >= 6_400
 
 
 def test_simulated_data_disclosure_is_explicit_and_repeated() -> None:

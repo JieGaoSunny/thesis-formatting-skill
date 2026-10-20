@@ -242,8 +242,20 @@ class _Scanner:
             )
             for pattern in profile.privacy.generic_patterns
         )
+        fictional = profile.privacy.fictional_values
+        self.fictional_identity_patterns = tuple(
+            re.compile(re.escape(value), re.IGNORECASE)
+            for value in (
+                fictional.institution_zh,
+                fictional.institution_en,
+                fictional.author,
+                fictional.student_id,
+                fictional.adviser,
+            )
+            if value
+        )
         placeholder_patterns = [
-            re.compile(pattern, re.IGNORECASE)
+            re.compile(pattern)
             for pattern in profile.privacy.unresolved_placeholder_patterns
         ]
         placeholder_patterns.extend(
@@ -253,6 +265,12 @@ class _Scanner:
             )
         )
         self.placeholder_patterns = tuple(placeholder_patterns)
+
+    def _mask_fictional_identities(self, text: str) -> str:
+        masked = unicodedata.normalize("NFC", text)
+        for pattern in self.fictional_identity_patterns:
+            masked = pattern.sub(lambda match: " " * len(match.group(0)), masked)
+        return masked
 
     def _redact_segment(self, segment: str) -> str:
         normalized = _normalized(segment)
@@ -340,6 +358,7 @@ class _Scanner:
         location: str,
         *,
         scan_placeholders: bool = True,
+        scan_profile_patterns: bool = True,
     ) -> None:
         normalized = _normalized(text)
         for term, normalized_term in self.deny_terms:
@@ -352,8 +371,12 @@ class _Scanner:
                     "A private denylist term was found.",
                     hash_value=_sha(normalized_term),
                 )
-        for rule_id, pattern, message in (*_BUILTIN_PATTERNS, *self.profile_patterns):
-            for match in pattern.finditer(text):
+        generic_text = self._mask_fictional_identities(text)
+        patterns = _BUILTIN_PATTERNS
+        if scan_profile_patterns:
+            patterns = (*patterns, *self.profile_patterns)
+        for rule_id, pattern, message in patterns:
+            for match in pattern.finditer(generic_text):
                 self.add(rule_id, path, location, match.group(0), message)
         if scan_placeholders:
             for pattern in self.placeholder_patterns:
@@ -695,7 +718,12 @@ class _Scanner:
     ) -> None:
         for element in root.iter():
             for value in element.attrib.values():
-                self.scan_text(value, path, location)
+                self.scan_text(
+                    value,
+                    path,
+                    location,
+                    scan_profile_patterns=False,
+                )
 
     def scan_ooxml_metadata(
         self,

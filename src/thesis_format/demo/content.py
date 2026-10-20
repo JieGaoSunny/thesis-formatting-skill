@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .figures import Figure
 from .study import (
@@ -90,6 +90,39 @@ def _paragraphs(*texts: str) -> tuple[Paragraph, ...]:
     return tuple(Paragraph(text) for text in texts)
 
 
+def _compact_demo_content(
+    chapters: tuple[Chapter, ...],
+    appendix: Appendix,
+) -> tuple[tuple[Chapter, ...], Appendix]:
+    compact_chapters = []
+    for chapter in chapters:
+        sections = []
+        for section in chapter.sections:
+            if chapter.number == 4 and section.title == "演示价值与改进方向":
+                paragraphs = section.paragraphs[1:2]
+            elif chapter.number == 4 and section.title == "主要结论":
+                paragraphs = section.paragraphs[:1]
+            elif (
+                chapter.number == 3
+                and section.title == "不确定性与敏感性分析"
+            ):
+                paragraphs = section.paragraphs
+            else:
+                paragraphs = section.paragraphs[:2]
+            sections.append(replace(section, paragraphs=paragraphs))
+        compact_chapters.append(
+            replace(
+                chapter,
+                sections=tuple(sections),
+                paragraphs=() if chapter.number == 4 else chapter.paragraphs[:1],
+            )
+        )
+    return tuple(compact_chapters), replace(
+        appendix,
+        paragraphs=appendix.paragraphs[:3],
+    )
+
+
 def build_demo_thesis() -> Thesis:
     """Build the internally consistent fictional apple-leaf demonstration thesis."""
 
@@ -117,7 +150,7 @@ def build_demo_thesis() -> Thesis:
         "使演示数据能够沿着“原始记录—校正计数—分层外推—整树合计”的链条被核对。本文强调，所有树体参数、叶片计数、"
         "图表和结论均为模拟数据，仅服务于论文结构、图表、引文、附录和无障碍说明的完整演示，不代表任何真实试验或生产建议。"
         "该方法的意义在于提供一个逻辑闭合、步骤透明且适合教学复核的案例，而不是证明某种真实苹果树管理技术的优劣。"
-    )
+    ) + _DISCLOSURE
     abstract_en = (
         "Estimating the number of leaves on an individual apple tree provides a "
         "clear demonstration of how local observations can be expanded into a "
@@ -427,6 +460,7 @@ def build_demo_thesis() -> Thesis:
         "图表可读性和复算顺序提出演示性建议。上述名称不指向任何真实人员或机构，也不存在真实资助、真实试验场地或真实参与者。"
         "本文全部内容由演示目的构造；对模拟数字、虚构参考文献和原创示意图的任何误用，均违背本论文的明确限制。"
     )
+    chapters, appendix = _compact_demo_content(chapters, appendix)
 
     return Thesis(
         title_zh="单株苹果树叶片数量的估算方法研究",

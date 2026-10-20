@@ -10,6 +10,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
+from PIL import Image, ImageChops
 
 from thesis_format.contracts import canonical_sha256
 from thesis_format.demo.build import build_before
@@ -84,6 +85,41 @@ def _audit_counts(report: dict[str, object]) -> Counter[str]:
         str(finding["severity"])
         for finding in report["findings"]  # type: ignore[index]
     )
+
+
+def _destination_page(
+    manifest: dict[str, object], destination_name: str
+) -> int:
+    return next(
+        int(destination["page"])
+        for destination in manifest["named_destinations"]  # type: ignore[index]
+        if destination["name"] == destination_name
+    )
+
+
+def _page_fonts(pdf: Path, page_number: int) -> set[str]:
+    import fitz
+
+    with fitz.open(pdf) as document:
+        page = document[page_number - 1]
+        return {
+            str(span["font"])
+            for block in page.get_text("dict")["blocks"]
+            for line in block.get("lines", ())
+            for span in line.get("spans", ())
+            if span.get("text", "").strip()
+        }
+
+
+def _nonwhite_fraction(image_path: Path) -> float:
+    with Image.open(image_path) as image:
+        grayscale = image.convert("L")
+        difference = ImageChops.difference(
+            grayscale, Image.new("L", grayscale.size, 255)
+        )
+        histogram = difference.histogram()
+        nonwhite = sum(histogram[1:])
+        return nonwhite / (grayscale.width * grayscale.height)
 
 
 @pytest.mark.integration
@@ -189,6 +225,18 @@ def test_committed_before_after_demo_regenerates_end_to_end(
             BASELINES / f"expected-{name}-render-manifest.json"
         )
         assert _normalized_render_manifest(manifest) == expected
+        pdf = tmp_path / f"{name}.pdf"
+        for selector in (
+            "demo_cover",
+            "demo_body",
+            "demo_references",
+            "demo_appendix",
+        ):
+            fonts = _page_fonts(pdf, _destination_page(manifest, selector))
+            assert any(font.startswith("Noto") and "CJK" in font for font in fonts)
+            if name == "after":
+                assert any(font.startswith("NotoSansCJK") for font in fonts)
+                assert any(font.startswith("NotoSerifCJK") for font in fonts)
 
     images = sorted((tmp_path / "screenshots").glob("*/*.png"))
     assert len(images) == 14
@@ -208,6 +256,19 @@ def test_committed_before_after_demo_regenerates_end_to_end(
                 )
             )
         ) == 1
+    for name in ("before", "after"):
+        for selector in (
+            "demo_cover",
+            "demo_body",
+            "demo_references",
+            "demo_appendix",
+        ):
+            image = next(
+                (tmp_path / "screenshots" / name).glob(
+                    f"{selector}-*.png"
+                )
+            )
+            assert _nonwhite_fraction(image) >= 0.005
 
     assert _docx_structural_hashes(EXAMPLES / "before.docx") == expected_hashes["before"]
     assert _docx_structural_hashes(EXAMPLES / "after.docx") == expected_hashes["after"]
