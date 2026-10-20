@@ -449,4 +449,9 @@ def load_profile(path: str | Path) -> FormatProfile:
     if not isinstance(data, dict):
         raise ContractError("format profile YAML must contain an object")
     validate_format_profile(data)
+    if data["page"]["section_start"]["body"] == "continuous":
+        raise ContractError(
+            "body section start for decimal page-number restart may not be continuous",
+            ("page", "section_start", "body"),
+        )
     return _build_profile(data)

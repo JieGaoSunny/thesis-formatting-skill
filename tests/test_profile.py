@@ -87,8 +87,8 @@ def test_page_fonts_and_normative_style_values_are_exact() -> None:
     )
 
     expected = {
-        "title_zh": ("center", "multiple", 1.25, 0, 0, 0, 26, True),
-        "title_en": ("center", "multiple", 1.25, 0, 0, 0, 22, True),
+        "title_zh": ("center", "multiple", 1.25, 0, 12, 0, 26, True),
+        "title_en": ("center", "multiple", 1.25, 0, 12, 0, 22, True),
         "front_heading": ("center", "multiple", 1, 24, 18, 0, 16, True),
         "heading_1": ("center", "multiple", 1, 24, 18, 0, 16, True),
         "appendix_heading": ("center", "multiple", 1, 24, 18, 0, 16, True),
@@ -138,6 +138,7 @@ def test_page_fonts_and_normative_style_values_are_exact() -> None:
             "Liberation Sans" if role in heading_roles else "Liberation Serif"
         )
     assert profile.styles["reference"].paragraph.hanging_indent_mm == 10
+    assert profile.styles["figure_caption"].paragraph.keep_with_next is True
 
 
 def test_numbering_front_matter_fields_headers_and_objects_are_exact() -> None:
@@ -296,6 +297,25 @@ def test_loader_rejects_disabled_header_with_active_source(tmp_path: Path) -> No
 
     with pytest.raises(ContractError, match="header_source"):
         load_profile(write_profile(tmp_path, data))
+
+
+def test_loader_rejects_continuous_body_section_start(tmp_path: Path) -> None:
+    data = profile_data()
+    data["page"]["section_start"]["body"] = "continuous"
+
+    with pytest.raises(ContractError, match="body section.*continuous"):
+        load_profile(write_profile(tmp_path, data))
+
+
+def test_loader_accepts_configured_decimal_body_restart(tmp_path: Path) -> None:
+    data = profile_data()
+    data["fields"]["page_number"]["body_start"] = 7
+
+    profile = load_profile(write_profile(tmp_path, data))
+
+    assert profile.page.section_start.body == "next_page"
+    assert profile.headers_footers.body.page_number_style == "decimal"
+    assert profile.fields.page_number.body_start == 7
 
 
 def test_loader_rejects_front_show_header_mismatch(tmp_path: Path) -> None:
