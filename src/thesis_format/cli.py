@@ -20,13 +20,13 @@ from thesis_format.format import format_document
 from thesis_format.profile import load_profile
 
 
-ExportFunction = Callable[[Path, Path], Path | Sequence[Path] | None]
+ExportFunction = Callable[[Path, Path, Path], Path | Sequence[Path] | None]
 PreviewFunction = Callable[[Path, Path], Path | Sequence[Path] | None]
 PrivacyFunction = Callable[[Path, Path], Mapping[str, object]]
 
 
 def _default_export_document(
-    source: Path, output: Path
+    source: Path, output: Path, manifest: Path
 ) -> Path | Sequence[Path] | None:
     try:
         from thesis_format.render import export_document
@@ -35,7 +35,7 @@ def _default_export_document(
             "optional PDF export tooling is unavailable; install tooling that "
             "provides thesis_format.render.export_document"
         ) from error
-    return export_document(source, output)
+    return export_document(source, output, manifest)
 
 
 def _default_preview_pdf(
@@ -99,6 +99,7 @@ def _parser() -> argparse.ArgumentParser:
     exporter = commands.add_parser("export", help="export a DOCX to PDF")
     exporter.add_argument("source", type=Path)
     exporter.add_argument("--output", "--pdf", dest="output", type=Path, required=True)
+    exporter.add_argument("--manifest", type=Path, required=True)
 
     preview = commands.add_parser("preview", help="render DOCX preview images")
     preview.add_argument("source", type=Path)
@@ -165,6 +166,40 @@ def _write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     print(path)
+
+
+def _require_missing(path: Path, label: str) -> None:
+    if path.exists() or path.is_symlink():
+        raise ValueError(f"{label} already exists: {path}")
+
+
+def _require_empty_or_missing_directory(path: Path, label: str) -> None:
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        raise ValueError(f"{label} already exists and is not a directory: {path}")
+    if path.is_dir():
+        try:
+            nonempty = next(path.iterdir(), None) is not None
+        except OSError as error:
+            raise ValueError(f"{label} cannot be inspected: {path}") from error
+        if nonempty:
+            raise ValueError(f"{label} already exists and is not empty: {path}")
+
+
+def _snapshot_paths(root: Path) -> frozenset[Path]:
+    if not root.is_dir():
+        return frozenset()
+    try:
+        return frozenset(path.resolve() for path in root.rglob("*"))
+    except OSError as error:
+        raise ValueError(f"artifact directory cannot be inspected: {root}") from error
+
+
+def _reject_preexisting_provider_artifacts(
+    paths: Sequence[Path], preexisting: frozenset[Path]
+) -> None:
+    for path in paths:
+        if path.resolve() in preexisting:
+            raise ValueError(f"provider artifact already existed: {path}")
 
 
 def _provider_paths(result: object) -> tuple[Path, ...]:
@@ -256,17 +291,33 @@ def _run_format(args: argparse.Namespace) -> int:
 
 def _run_export(args: argparse.Namespace, function: ExportFunction | None) -> int:
     _require_file(args.source, "input")
-    _reject_path_collisions(("source", args.source), ("output", args.output))
+    _reject_path_collisions(
+        ("source", args.source),
+        ("output", args.output),
+        ("manifest", args.manifest),
+    )
+    _require_missing(args.output, "PDF output")
+    _require_missing(args.manifest, "render manifest")
     if function is None:
         raise RuntimeError(
             "optional PDF export tooling is unavailable; install tooling that "
             "provides thesis_format.render.export_document"
         )
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    returned_paths = _provider_paths(function(args.source, args.output))
+    args.manifest.parent.mkdir(parents=True, exist_ok=True)
+    _require_missing(args.output, "PDF output")
+    _require_missing(args.manifest, "render manifest")
+    returned_paths = _provider_paths(
+        function(args.source, args.output, args.manifest)
+    )
     _require_nonempty_regular_file(args.output, "PDF output")
+    _validate_returned_artifacts((args.manifest,))
     _validate_returned_artifacts(
-        tuple(path for path in returned_paths if path != args.output)
+        tuple(
+            path
+            for path in returned_paths
+            if path not in {args.output, args.manifest}
+        )
     )
     print(args.output)
     return 0
@@ -278,12 +329,17 @@ def _run_preview(args: argparse.Namespace, function: PreviewFunction | None) -> 
         ("source", args.source),
         ("preview output", args.output_directory),
     )
+    _require_empty_or_missing_directory(
+        args.output_directory, "preview output directory"
+    )
     if function is None:
         raise RuntimeError(
             "optional preview tooling is unavailable; install tooling that "
             "provides thesis_format.render.preview_pdf"
         )
+    preexisting = _snapshot_paths(args.output_directory.parent)
     returned_paths = _provider_paths(function(args.source, args.output_directory))
+    _reject_preexisting_provider_artifacts(returned_paths, preexisting)
     _validate_returned_artifacts(returned_paths)
     image_suffixes = {
         ".bmp",
@@ -326,6 +382,7 @@ def _run_release_check(
         ("profile", args.profile),
         ("report", args.report),
     )
+    _require_missing(args.report, "release report")
     if function is None:
         raise RuntimeError(
             "optional privacy tooling is unavailable; install tooling that "

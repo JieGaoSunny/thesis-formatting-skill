@@ -355,7 +355,13 @@ def test_missing_input_is_invalid_input_exit_2(tmp_path: Path) -> None:
     (
         (
             "export",
-            ("input.docx", "--output", "output.pdf"),
+            (
+                "input.docx",
+                "--output",
+                "output.pdf",
+                "--manifest",
+                "render-manifest.json",
+            ),
             "thesis_format.render.export_document",
         ),
         (
@@ -406,10 +412,15 @@ def test_default_optional_tool_wrappers_lazy_import_and_dispatch(
 
     render = ModuleType("thesis_format.render")
 
-    def export_document(document: Path, output: Path) -> Path:
-        calls.append(("export", (document, output)))
+    def export_document(document: Path, output: Path, manifest: Path) -> list[Path]:
+        calls.append(("export", (document, output, manifest)))
         output.write_bytes(b"pdf")
-        return output
+        manifest.write_bytes(
+            (
+                ROOT / "tests" / "fixtures" / "contracts" / "render-manifest.json"
+            ).read_bytes()
+        )
+        return [output, manifest]
 
     def preview_pdf(document: Path, output_directory: Path) -> list[Path]:
         calls.append(("preview", (document, output_directory)))
@@ -435,9 +446,22 @@ def test_default_optional_tool_wrappers_lazy_import_and_dispatch(
     monkeypatch.setitem(sys.modules, "thesis_format.privacy", privacy)
 
     pdf = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
     preview_dir = tmp_path / "preview"
     privacy_report = tmp_path / "privacy.json"
-    assert cli.main(["export", str(source), "--output", str(pdf)]) == 0
+    assert (
+        cli.main(
+            [
+                "export",
+                str(source),
+                "--output",
+                str(pdf),
+                "--manifest",
+                str(manifest),
+            ]
+        )
+        == 0
+    )
     assert (
         cli.main(["preview", str(source), "--output-dir", str(preview_dir)]) == 0
     )
@@ -468,10 +492,15 @@ def test_export_preview_and_release_check_use_injected_functions(
     profile.write_text("unused", encoding="utf-8")
     calls: list[tuple[str, tuple[Path, ...]]] = []
 
-    def export(document: Path, output: Path) -> Path:
-        calls.append(("export", (document, output)))
+    def export(document: Path, output: Path, manifest: Path) -> list[Path]:
+        calls.append(("export", (document, output, manifest)))
         output.write_bytes(b"pdf")
-        return output
+        manifest.write_bytes(
+            (
+                ROOT / "tests" / "fixtures" / "contracts" / "render-manifest.json"
+            ).read_bytes()
+        )
+        return [output, manifest]
 
     def preview(document: Path, output_directory: Path) -> list[Path]:
         calls.append(("preview", (document, output_directory)))
@@ -494,12 +523,20 @@ def test_export_preview_and_release_check_use_injected_functions(
         privacy_check=privacy,
     )
     pdf = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
     preview_dir = tmp_path / "preview"
     privacy_report = tmp_path / "privacy.json"
 
     assert (
         cli.main(
-            ["export", str(source), "--output", str(pdf)],
+            [
+                "export",
+                str(source),
+                "--output",
+                str(pdf),
+                "--manifest",
+                str(manifest),
+            ],
             dependencies=dependencies,
         )
         == 0
@@ -528,6 +565,7 @@ def test_export_preview_and_release_check_use_injected_functions(
 
     assert [name for name, _ in calls] == ["export", "preview", "privacy"]
     assert pdf.is_file()
+    assert manifest.is_file()
     assert (preview_dir / "page-1.png").is_file()
     assert json.loads(privacy_report.read_text(encoding="utf-8"))["summary"][
         "errors"
@@ -608,10 +646,10 @@ def test_release_check_rejects_semantically_invalid_provider_report(
 @pytest.mark.parametrize(
     "provider",
     (
-        lambda _source, _output: None,
-        lambda _source, _output: {},
-        lambda _source, output: output,
-        lambda _source, output: output.write_bytes(b"") or output,
+        lambda _source, _output, _manifest: None,
+        lambda _source, _output, _manifest: {},
+        lambda _source, output, _manifest: output,
+        lambda _source, output, _manifest: output.write_bytes(b"") or output,
     ),
 )
 def test_export_rejects_noop_or_empty_artifact_provider(
@@ -621,16 +659,85 @@ def test_export_rejects_noop_or_empty_artifact_provider(
 ) -> None:
     source = tmp_path / "input.docx"
     output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
     source.write_bytes(b"docx")
 
     result = cli.main(
-        ["export", str(source), "--output", str(output)],
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
         dependencies=cli.CliDependencies(export_document=provider),  # type: ignore[arg-type]
     )
 
     captured = capsys.readouterr()
     assert result == 2
     assert str(output) not in captured.out
+
+
+def test_export_rejects_existing_pdf_before_provider(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+    output.write_bytes(b"stale pdf")
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
+        dependencies=cli.CliDependencies(
+            export_document=lambda _source, _output, _manifest: pytest.fail(
+                "export provider must not run for an existing PDF destination"
+            )
+        ),
+    )
+
+    assert result == 2
+    assert output.read_bytes() == b"stale pdf"
+
+
+def test_export_rejects_existing_manifest_before_provider(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+    manifest.write_bytes(
+        (
+            ROOT / "tests" / "fixtures" / "contracts" / "render-manifest.json"
+        ).read_bytes()
+    )
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
+        dependencies=cli.CliDependencies(
+            export_document=lambda _source, _output, _manifest: pytest.fail(
+                "export provider must not run for an existing manifest destination"
+            )
+        ),
+    )
+
+    assert result == 2
 
 
 def test_export_rejects_invalid_returned_render_manifest(
@@ -642,13 +749,22 @@ def test_export_rejects_invalid_returned_render_manifest(
     manifest = tmp_path / "render-manifest.json"
     source.write_bytes(b"docx")
 
-    def provider(_source: Path, requested_output: Path) -> list[Path]:
+    def provider(
+        _source: Path, requested_output: Path, requested_manifest: Path
+    ) -> list[Path]:
         requested_output.write_bytes(b"pdf")
-        manifest.write_text("{}", encoding="utf-8")
-        return [requested_output, manifest]
+        requested_manifest.write_text("{}", encoding="utf-8")
+        return [requested_output, requested_manifest]
 
     result = cli.main(
-        ["export", str(source), "--output", str(output)],
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
         dependencies=cli.CliDependencies(export_document=provider),
     )
 
@@ -657,23 +773,32 @@ def test_export_rejects_invalid_returned_render_manifest(
     assert str(output) not in captured.out
 
 
-def test_export_accepts_valid_returned_render_manifest(tmp_path: Path) -> None:
+def test_export_accepts_new_pdf_and_manifest_destinations(tmp_path: Path) -> None:
     source = tmp_path / "input.docx"
     output = tmp_path / "output.pdf"
     manifest = tmp_path / "render-manifest.json"
     source.write_bytes(b"docx")
 
-    def provider(_source: Path, requested_output: Path) -> list[Path]:
+    def provider(
+        _source: Path, requested_output: Path, requested_manifest: Path
+    ) -> list[Path]:
         requested_output.write_bytes(b"pdf")
-        manifest.write_bytes(
+        requested_manifest.write_bytes(
             (
                 ROOT / "tests" / "fixtures" / "contracts" / "render-manifest.json"
             ).read_bytes()
         )
-        return [requested_output, manifest]
+        return [requested_output, requested_manifest]
 
     result = cli.main(
-        ["export", str(source), "--output", str(output)],
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
         dependencies=cli.CliDependencies(export_document=provider),
     )
 
@@ -686,12 +811,21 @@ def test_export_rejects_missing_returned_render_manifest(tmp_path: Path) -> None
     manifest = tmp_path / "missing-render-manifest.json"
     source.write_bytes(b"docx")
 
-    def provider(_source: Path, requested_output: Path) -> list[Path]:
+    def provider(
+        _source: Path, requested_output: Path, _requested_manifest: Path
+    ) -> list[Path]:
         requested_output.write_bytes(b"pdf")
         return [requested_output, manifest]
 
     result = cli.main(
-        ["export", str(source), "--output", str(output)],
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
         dependencies=cli.CliDependencies(export_document=provider),
     )
 
@@ -731,7 +865,30 @@ def test_preview_rejects_noop_missing_or_empty_artifact_provider(
     assert str(output_directory) not in captured.out
 
 
-def test_preview_accepts_nonempty_images_discovered_in_output_directory(
+def test_preview_rejects_existing_nonempty_directory_before_provider(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.docx"
+    output_directory = tmp_path / "preview"
+    stale_image = output_directory / "page-1.png"
+    source.write_bytes(b"docx")
+    output_directory.mkdir()
+    stale_image.write_bytes(b"stale png")
+
+    result = cli.main(
+        ["preview", str(source), "--output-dir", str(output_directory)],
+        dependencies=cli.CliDependencies(
+            preview_document=lambda _source, _directory: pytest.fail(
+                "preview provider must not run for a nonempty output directory"
+            )
+        ),
+    )
+
+    assert result == 2
+    assert stale_image.read_bytes() == b"stale png"
+
+
+def test_preview_accepts_new_images_created_in_output_directory(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "input.docx"
@@ -748,6 +905,36 @@ def test_preview_accepts_nonempty_images_discovered_in_output_directory(
     )
 
     assert result == 0
+
+
+def test_release_check_rejects_existing_report_before_provider(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.docx"
+    profile = tmp_path / "profile.yaml"
+    report = tmp_path / "privacy.json"
+    source.write_bytes(b"docx")
+    profile.write_text("unused", encoding="utf-8")
+    report.write_bytes(b"stale report")
+
+    result = cli.main(
+        [
+            "release-check",
+            str(source),
+            "--profile",
+            str(profile),
+            "--report",
+            str(report),
+        ],
+        dependencies=cli.CliDependencies(
+            privacy_check=lambda _source, _profile: pytest.fail(
+                "release provider must not run for an existing report destination"
+            )
+        ),
+    )
+
+    assert result == 2
+    assert report.read_bytes() == b"stale report"
 
 
 def test_preview_accepts_images_in_output_directory_with_returned_manifest(

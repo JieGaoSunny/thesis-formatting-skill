@@ -90,7 +90,8 @@ def test_skill_has_exact_commands_quick_reference_and_pressure_red_flags() -> No
     ) in text
     assert (
         "thesis-format export build/thesis-formatted.docx "
-        "--output build/thesis-formatted.pdf"
+        "--output build/thesis-formatted.pdf "
+        "--manifest reports/render-manifest.json"
     ) in text
     for rationalization in (
         "The deadline is close",
