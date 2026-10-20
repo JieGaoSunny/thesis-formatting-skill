@@ -15,6 +15,7 @@ from typing import Iterable, Mapping, Sequence
 import pymupdf
 import pikepdf
 from lxml import etree
+from PIL import ExifTags, Image, UnidentifiedImageError
 
 from thesis_format.contracts import (
     canonical_sha256,
@@ -50,7 +51,18 @@ _TEXT_SUFFIXES = {
     ".yaml",
     ".yml",
 }
+_IMAGE_SUFFIXES = {".jpeg", ".jpg", ".png"}
+_UTF16LE_EXIF_TAGS = {
+    "XPAuthor",
+    "XPComment",
+    "XPKeywords",
+    "XPSubject",
+    "XPTitle",
+}
 _SKIPPED_DIRECTORIES = {".git", ".hg", ".svn", "__pycache__", ".pytest_cache"}
+_WORDPROCESSINGML_NAMESPACE = (
+    "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+)
 _BUILTIN_PATTERNS = (
     (
         "PRIVACY.ABSOLUTE_PATH",
@@ -361,6 +373,15 @@ class _Scanner:
             "An in-scope file could not be scanned.",
         )
 
+    def unsupported(self, display_path: str) -> None:
+        self.add(
+            "PRIVACY.UNSUPPORTED",
+            display_path,
+            "file",
+            PurePosixPath(display_path).suffix or display_path,
+            "An in-scope file uses an unsupported format.",
+        )
+
     def scan_regular_file(self, path: Path, display_path: str) -> None:
         try:
             mode = path.stat().st_mode
@@ -374,6 +395,10 @@ class _Scanner:
             self.scan_docx(path, display_path)
         elif suffix == ".pdf":
             self.scan_pdf(path, display_path)
+        elif suffix == ".svg":
+            self.scan_svg(path, display_path)
+        elif suffix in _IMAGE_SUFFIXES:
+            self.scan_image(path, display_path)
         elif suffix in _TEXT_SUFFIXES or not suffix:
             try:
                 text = path.read_text(encoding="utf-8", errors="strict")
@@ -382,8 +407,7 @@ class _Scanner:
             else:
                 self.scan_text_lines(text, display_path)
         else:
-            self.skipped.add(display_path)
-            return
+            self.unsupported(display_path)
         self.scanned.add(display_path)
 
     def scan_text_lines(self, text: str, display_path: str) -> None:
@@ -409,8 +433,19 @@ class _Scanner:
                         continue
                     try:
                         raw = package.read(name)
-                        text = raw.decode("utf-8", errors="strict")
-                    except (KeyError, OSError, UnicodeError, RuntimeError):
+                        root = etree.fromstring(
+                            raw,
+                            parser=etree.XMLParser(
+                                resolve_entities=False,
+                                no_network=True,
+                            ),
+                        )
+                    except (
+                        KeyError,
+                        OSError,
+                        RuntimeError,
+                        etree.XMLSyntaxError,
+                    ):
                         self.add(
                             "PRIVACY.UNREADABLE",
                             display_path,
@@ -419,16 +454,72 @@ class _Scanner:
                             "An in-scope document part could not be scanned.",
                         )
                         continue
-                    self.scan_text(text, display_path, f"part:{safe_name}")
-                    self.scan_ooxml_metadata(raw, display_path, safe_name)
+                    self.scan_ooxml_text(root, display_path, safe_name)
+                    self.scan_xml_attributes(root, display_path, f"part:{safe_name}")
+                    self.scan_ooxml_metadata(root, display_path, safe_name)
         except (OSError, zipfile.BadZipFile):
             self.unreadable(path, display_path, "package")
 
-    def scan_ooxml_metadata(self, raw: bytes, path: str, part_name: str) -> None:
-        try:
-            root = etree.fromstring(raw)
-        except etree.XMLSyntaxError:
+    def scan_ooxml_text(
+        self,
+        root: etree._Element,
+        path: str,
+        part_name: str,
+    ) -> None:
+        location = f"part:{part_name}"
+        namespaces = {"w": _WORDPROCESSINGML_NAMESPACE}
+        paragraphs = root.xpath(".//w:p", namespaces=namespaces)
+        if paragraphs:
+            for paragraph in paragraphs:
+                visible_nodes = paragraph.xpath(
+                    ".//w:t | .//w:delText",
+                    namespaces=namespaces,
+                )
+                if visible_nodes:
+                    self.scan_text(
+                        "".join(node.text or "" for node in visible_nodes),
+                        path,
+                        location,
+                    )
+            orphan_nodes = root.xpath(
+                ".//w:t[not(ancestor::w:p)] | .//w:delText[not(ancestor::w:p)]",
+                namespaces=namespaces,
+            )
+            for node in orphan_nodes:
+                if node.text:
+                    self.scan_text(node.text, path, location)
             return
+        visible_nodes = root.xpath(
+            ".//w:t | .//w:delText",
+            namespaces=namespaces,
+        )
+        if visible_nodes:
+            self.scan_text(
+                "".join(node.text or "" for node in visible_nodes),
+                path,
+                location,
+            )
+            return
+        text = "".join(root.itertext())
+        if text:
+            self.scan_text(text, path, location)
+
+    def scan_xml_attributes(
+        self,
+        root: etree._Element,
+        path: str,
+        location: str,
+    ) -> None:
+        for element in root.iter():
+            for value in element.attrib.values():
+                self.scan_text(value, path, location)
+
+    def scan_ooxml_metadata(
+        self,
+        root: etree._Element,
+        path: str,
+        part_name: str,
+    ) -> None:
         properties: list[tuple[str, str]] = []
         if part_name == "docProps/core.xml":
             for element in root.iter():
@@ -489,6 +580,51 @@ class _Scanner:
                     value,
                     "A non-fictional identity value was found.",
                 )
+
+    def scan_svg(self, path: Path, display_path: str) -> None:
+        try:
+            root = etree.parse(
+                str(path),
+                parser=etree.XMLParser(resolve_entities=False, no_network=True),
+            ).getroot()
+        except (OSError, etree.XMLSyntaxError):
+            self.unreadable(path, display_path, "svg")
+            return
+        text = "".join(root.itertext())
+        if text:
+            self.scan_text(text, display_path, "svg:text")
+        self.scan_xml_attributes(root, display_path, "svg:attribute")
+
+    def scan_image(self, path: Path, display_path: str) -> None:
+        try:
+            with Image.open(path) as image:
+                image.load()
+                metadata = list(image.info.items())
+                metadata.extend(
+                    (
+                        ExifTags.TAGS.get(tag, str(tag)),
+                        value,
+                    )
+                    for tag, value in image.getexif().items()
+                )
+            for key, value in metadata:
+                if isinstance(value, bytes):
+                    encoding = (
+                        "utf-16le"
+                        if str(key) in _UTF16LE_EXIF_TAGS
+                        else "utf-8"
+                    )
+                    rendered = value.decode(encoding, errors="ignore").rstrip("\0")
+                else:
+                    rendered = str(value)
+                if rendered:
+                    self.scan_text(
+                        rendered,
+                        display_path,
+                        f"metadata:{str(key).casefold()}",
+                    )
+        except (OSError, UnidentifiedImageError, ValueError):
+            self.unreadable(path, display_path, "image")
 
     def scan_pdf(self, path: Path, display_path: str) -> None:
         try:

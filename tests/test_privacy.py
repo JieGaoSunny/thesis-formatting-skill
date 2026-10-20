@@ -10,6 +10,7 @@ import fitz
 import pikepdf
 import pytest
 import yaml
+from PIL import Image, PngImagePlugin
 from pikepdf.models.metadata import PdfMetadata
 
 from thesis_format import cli
@@ -199,6 +200,67 @@ def test_required_ooxml_entry_names_are_not_treated_as_placeholders(
     assert "PRIVACY.UNRESOLVED_PLACEHOLDER" not in _rules(report)
 
 
+def test_docx_reconstructs_split_email_across_runs_and_hyperlink(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "thesis.docx"
+    _write_docx(
+        document,
+        {
+            "word/document.xml": (
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                "<w:body><w:p><w:r><w:t>private@</w:t></w:r>"
+                "<w:hyperlink><w:r><w:t>example.</w:t></w:r></w:hyperlink>"
+                "<w:r><w:t>test</w:t></w:r></w:p></w:body></w:document>"
+            ),
+        },
+    )
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    assert "PRIVACY.EMAIL" in _rules(report)
+
+
+def test_docx_reconstructs_split_denylist_term_across_text_and_deleted_text(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "thesis.docx"
+    _write_docx(
+        document,
+        {
+            "word/document.xml": (
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                "<w:body><w:p><w:r><w:t>Secret </w:t></w:r>"
+                "<w:del><w:r><w:delText>Student</w:delText></w:r></w:del>"
+                "</w:p></w:body></w:document>"
+            ),
+        },
+    )
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    assert "PRIVACY.DENYLIST" in _rules(report)
+
+
+def test_docx_does_not_join_visible_text_across_paragraphs(tmp_path: Path) -> None:
+    document = tmp_path / "thesis.docx"
+    _write_docx(
+        document,
+        {
+            "word/document.xml": (
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                "<w:body><w:p><w:r><w:t>private@</w:t></w:r></w:p>"
+                "<w:p><w:r><w:t>example.test</w:t></w:r></w:p>"
+                "</w:body></w:document>"
+            ),
+        },
+    )
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    assert "PRIVACY.EMAIL" not in _rules(report)
+
+
 def test_docx_forbidden_metadata_keys_come_from_profile_for_all_property_parts(
     tmp_path: Path,
 ) -> None:
@@ -374,6 +436,70 @@ def test_scans_pdf_text_and_metadata(tmp_path: Path) -> None:
     locations = {finding["location"] for finding in report["findings"]}  # type: ignore[index]
     assert "page:1" in locations
     assert "metadata:author" in locations
+
+
+def test_scans_jpeg_exif_metadata(tmp_path: Path) -> None:
+    image_path = tmp_path / "figure.jpg"
+    image = Image.new("RGB", (2, 2), "white")
+    exif = Image.Exif()
+    exif[315] = "private@example.test"
+    image.save(image_path, exif=exif)
+
+    report = release_check(image_path, PROFILE, DENYLIST)
+
+    assert "PRIVACY.EMAIL" in _rules(report)
+    assert report["scanned_files"] == ["figure.jpg"]
+
+
+def test_scans_utf16le_jpeg_exif_metadata(tmp_path: Path) -> None:
+    image_path = tmp_path / "figure.jpg"
+    image = Image.new("RGB", (2, 2), "white")
+    exif = Image.Exif()
+    exif[40093] = "private@example.test\0".encode("utf-16le")
+    image.save(image_path, exif=exif)
+
+    report = release_check(image_path, PROFILE, DENYLIST)
+
+    assert "PRIVACY.EMAIL" in _rules(report)
+
+
+def test_clean_png_is_scanned_without_findings(tmp_path: Path) -> None:
+    image_path = tmp_path / "figure.png"
+    image = Image.new("RGB", (2, 2), "white")
+    metadata = PngImagePlugin.PngInfo()
+    metadata.add_text("Description", "Public thesis figure")
+    image.save(image_path, pnginfo=metadata)
+
+    report = release_check(image_path, PROFILE, DENYLIST)
+
+    assert report["findings"] == []
+    assert report["scanned_files"] == ["figure.png"]
+    assert report["skipped_files"] == []
+
+
+def test_extensionless_utf8_text_is_supported(tmp_path: Path) -> None:
+    source = tmp_path / "NOTICE"
+    source.write_text("private@example.test", encoding="utf-8")
+
+    report = release_check(source, PROFILE, DENYLIST)
+
+    assert "PRIVACY.EMAIL" in _rules(report)
+    assert report["scanned_files"] == ["NOTICE"]
+
+
+@pytest.mark.parametrize("suffix", [".bin", ".zip", ".doc"])
+def test_unknown_binary_and_archive_formats_fail_closed_as_unsupported(
+    tmp_path: Path,
+    suffix: str,
+) -> None:
+    source = tmp_path / f"attachment{suffix}"
+    source.write_bytes(b"private@example.test")
+
+    report = release_check(source, PROFILE, DENYLIST)
+
+    assert _rules(report) == ["PRIVACY.UNSUPPORTED"]
+    assert report["scanned_files"] == [source.name]
+    assert report["skipped_files"] == []
 
 
 @pytest.mark.parametrize(
