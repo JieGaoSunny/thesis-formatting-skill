@@ -518,7 +518,7 @@
           "flags": {
             "type": "array",
             "uniqueItems": true,
-            "items": {"enum": ["ascii", "ignore_case", "multiline", "unicode"]}
+            "items": {"enum": ["ignore_case", "unicode"]}
           },
           "priority": {"type": "integer", "minimum": 0, "maximum": 1000}
         }

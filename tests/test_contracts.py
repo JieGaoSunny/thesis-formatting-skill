@@ -374,6 +374,16 @@ def test_format_profile_rejects_role_detection_patterns_without_whole_string_anc
         validate_contract("format-profile", profile)
 
 
+def test_format_profile_rejects_multiline_role_detection_patterns() -> None:
+    profile = fixture("format-profile")
+    pattern = profile["role_detection"]["text_patterns"]["heading_1"][0]
+    pattern["pattern"] = "^第.+章$"
+    pattern["flags"] = ["multiline"]
+
+    with pytest.raises(ContractError, match=r"multiline|flags"):
+        validate_contract("format-profile", profile)
+
+
 def test_format_profile_rejects_duplicate_privacy_regex_flags() -> None:
     profile = fixture("format-profile")
     profile["privacy"]["generic_patterns"][0]["flags"] = "ii"

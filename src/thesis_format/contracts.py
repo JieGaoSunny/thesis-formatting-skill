@@ -29,9 +29,7 @@ CONTRACT_NAMES = frozenset(
     }
 )
 _TEXT_PATTERN_FLAGS = {
-    "ascii": re.ASCII,
     "ignore_case": re.IGNORECASE,
-    "multiline": re.MULTILINE,
     "unicode": re.UNICODE,
 }
 _PRIVACY_PATTERN_FLAGS = {
