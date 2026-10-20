@@ -78,10 +78,70 @@ def link_numbering_level_to_style(
         )
     for existing in level_element.xpath("./w:pStyle", namespaces=namespaces):
         level_element.remove(existing)
+    for existing in level_element.xpath("./w:numFmt", namespaces=namespaces):
+        level_element.remove(existing)
+    etree.SubElement(
+        level_element,
+        f"{word}numFmt",
+        {f"{word}val": "decimal"},
+    )
     etree.SubElement(
         level_element,
         f"{word}pStyle",
         {f"{word}val": style_id},
+    )
+    replace_zip_part(
+        path,
+        "word/numbering.xml",
+        etree.tostring(
+            numbering,
+            xml_declaration=True,
+            encoding="UTF-8",
+            standalone=True,
+        ),
+    )
+
+
+def set_numbering_level_format(
+    path: Path,
+    *,
+    num_id: str,
+    level: int,
+    value: str = "decimal",
+) -> None:
+    with ZipFile(path) as archive:
+        numbering = etree.fromstring(archive.read("word/numbering.xml"))
+    namespaces = {
+        "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    }
+    word = f"{{{namespaces['w']}}}"
+    abstract_id = numbering.xpath(
+        f"./w:num[@w:numId='{num_id}']/w:abstractNumId/@w:val",
+        namespaces=namespaces,
+    )[0]
+    levels = numbering.xpath(
+        f"./w:abstractNum[@w:abstractNumId='{abstract_id}']"
+        f"/w:lvl[@w:ilvl='{level}']",
+        namespaces=namespaces,
+    )
+    level_element = (
+        levels[0]
+        if levels
+        else etree.SubElement(
+            numbering.xpath(
+                f"./w:abstractNum[@w:abstractNumId='{abstract_id}']",
+                namespaces=namespaces,
+            )[0],
+            f"{word}lvl",
+            {f"{word}ilvl": str(level)},
+        )
+    )
+    for existing in level_element.xpath("./w:numFmt", namespaces=namespaces):
+        level_element.remove(existing)
+    etree.SubElement(
+        level_element,
+        f"{word}numFmt",
+        {f"{word}val": value},
     )
     replace_zip_part(
         path,
@@ -136,6 +196,7 @@ def test_explicit_fields_bookmarks_and_numbering_are_enumerated(
             },
         ],
     )
+    set_numbering_level_format(path, num_id="1", level=1)
     document = inspect_document(path, PROFILE)
     caption, heading = document.paragraphs
     assert caption.role == "figure_caption"
@@ -176,10 +237,7 @@ def test_numbering_with_matching_anchored_pattern_is_explicit_heading(
         ],
     )
     node = inspect_document(path, PROFILE).paragraphs[-1]
-    assert (node.role, node.role_source) == (
-        "heading_2",
-        "explicit_structure",
-    )
+    assert (node.role, node.role_source) == ("heading_2", "text_pattern")
     assert node.repairable is True
 
 
@@ -212,6 +270,7 @@ def test_numbering_with_matching_outline_level_is_explicit_heading(
             },
         ],
     )
+    set_numbering_level_format(path, num_id="1", level=1)
     node = inspect_document(path, PROFILE).paragraphs[-1]
     assert (node.role, node.role_source) == (
         "heading_2",

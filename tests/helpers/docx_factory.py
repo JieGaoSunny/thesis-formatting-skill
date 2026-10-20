@@ -117,7 +117,11 @@ def build_docx(
             _append_bookmark(paragraph, str(bookmark), index * 100 + bookmark_offset)
         numbering_level = item.get("numbering_level")
         if numbering_level is not None:
-            _set_numbering(paragraph, int(numbering_level))
+            _set_numbering(
+                paragraph,
+                int(numbering_level),
+                int(item.get("numbering_num_id", 1)),
+            )
         outline_level = item.get("outline_level")
         if outline_level is not None:
             _set_outline_level(paragraph, int(outline_level))

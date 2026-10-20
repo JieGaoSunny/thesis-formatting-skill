@@ -18,7 +18,7 @@ from thesis_format.contracts import (
     shortest_unique_digest_prefixes,
     validate_audit,
 )
-from thesis_format.ooxml import OoxmlPackage
+from thesis_format.ooxml import OoxmlPackage, resolve_relationship_target
 from thesis_format.profile import FormatProfile
 from thesis_format.semantic import SemanticDocument, inspect_document
 
@@ -534,17 +534,24 @@ class NumberingRule:
             context.paragraph_elements,
             strict=True,
         ):
+            has_numbering = _has_heading_numbering(context, node, paragraph)
+            has_sequence = _has_caption_numbering(context, node)
+            if node.role in {"figure_caption", "table_caption"}:
+                if not has_sequence:
+                    yield AuditFinding(
+                        "NUMBERING.MANUAL_CAPTION",
+                        "violation",
+                        node.location,
+                        "Caption number is typed manually instead of generated.",
+                        True,
+                        node.manual_number_token or "static caption label",
+                        "chapter-based automatic caption fields",
+                    )
+                continue
             if not node.manual_number_token:
                 continue
-            has_numbering = bool(
-                paragraph.xpath("./w:pPr/w:numPr", namespaces=NS)
-            )
-            has_sequence = any(
-                field.upper().startswith(("SEQ ", "STYLEREF "))
-                for field in node.fields
-            )
             if node.role in {"heading_1", "heading_2", "heading_3"} and not (
-                has_numbering or has_sequence
+                has_numbering
             ):
                 yield AuditFinding(
                     "NUMBERING.MANUAL_HEADING",
@@ -556,7 +563,8 @@ class NumberingRule:
                     "automatic numbering",
                 )
             elif node.role == "appendix_heading" and not (
-                has_numbering or has_sequence
+                has_numbering
+                or any(field.upper().startswith("SEQ ") for field in node.fields)
             ):
                 yield AuditFinding(
                     "NUMBERING.MANUAL_APPENDIX",
@@ -567,16 +575,102 @@ class NumberingRule:
                     node.manual_number_token,
                     "automatic appendix numbering",
                 )
-            elif node.role in {"figure_caption", "table_caption"} and not has_sequence:
-                yield AuditFinding(
-                    "NUMBERING.MANUAL_CAPTION",
-                    "violation",
-                    node.location,
-                    "Caption number is typed manually instead of generated.",
-                    True,
-                    node.manual_number_token,
-                    "SEQ field",
-                )
+
+
+def _has_heading_numbering(
+    context: AuditContext,
+    node,
+    paragraph: etree._Element,
+) -> bool:
+    num_ids = paragraph.xpath("./w:pPr/w:numPr/w:numId/@w:val", namespaces=NS)
+    if (
+        not num_ids
+        or num_ids[0] == "0"
+        or "word/numbering.xml" not in context.package.parts
+    ):
+        return False
+    levels = paragraph.xpath("./w:pPr/w:numPr/w:ilvl/@w:val", namespaces=NS)
+    try:
+        level = int(levels[0]) if levels else 0
+    except ValueError:
+        return False
+    expected_level = {"heading_1": 0, "heading_2": 1, "heading_3": 2}.get(node.role)
+    if expected_level != level:
+        return False
+    numbering = context.package.xml("word/numbering.xml")
+    abstract_ids = numbering.xpath(
+        f"./w:num[@w:numId='{num_ids[0]}']/w:abstractNumId/@w:val",
+        namespaces=NS,
+    )
+    if not abstract_ids:
+        return False
+    level_nodes = numbering.xpath(
+        f"./w:abstractNum[@w:abstractNumId='{abstract_ids[0]}']"
+        f"/w:lvl[@w:ilvl='{level}']",
+        namespaces=NS,
+    )
+    if not level_nodes:
+        return False
+    level_node = level_nodes[0]
+    formats = level_node.xpath("./w:numFmt/@w:val", namespaces=NS)
+    if not formats or formats[0] in {"bullet", "none"}:
+        return False
+    style_ids = level_node.xpath("./w:pStyle/@w:val", namespaces=NS)
+    style_matches = bool(
+        style_ids
+        and any(
+            style_ids[0].casefold() == name.casefold()
+            for name in context.profile.styles[node.role].word_styles
+        )
+    )
+    outline_values = paragraph.xpath("./w:pPr/w:outlineLvl/@w:val", namespaces=NS)
+    outline_matches = bool(
+        outline_values and outline_values[0] == str(expected_level)
+    )
+    abstract = level_node.getparent()
+    multi_types = abstract.xpath("./w:multiLevelType/@w:val", namespaces=NS)
+    multilevel_matches = bool(
+        multi_types
+        and multi_types[0] in {"multilevel", "hybridMultilevel"}
+        and _style_role_matches(context, node.role, node.style_id)
+    )
+    return style_matches or outline_matches or multilevel_matches
+
+
+def _has_caption_numbering(context: AuditContext, node) -> bool:
+    if node.role not in {"figure_caption", "table_caption"}:
+        return False
+    label = "figure" if node.role == "figure_caption" else "table"
+    localized_label = "图" if label == "figure" else "表"
+    fields = tuple(re.sub(r"\s+", " ", field).strip() for field in node.fields)
+    sequence_fields = tuple(
+        field
+        for field in fields
+        if re.match(
+            rf"^SEQ\s+({label}|{localized_label})\b",
+            field,
+            re.IGNORECASE,
+        )
+    )
+    if not sequence_fields:
+        return False
+    if any(
+        re.search(r"\\s\s+1\b", field, re.IGNORECASE)
+        for field in sequence_fields
+    ):
+        return True
+    heading_styles = {
+        name.casefold() for name in context.profile.styles["heading_1"].word_styles
+    }
+    for field in fields:
+        match = re.match(
+            r"^STYLEREF\s+\"?([^\"\\]+?)\"?(?:\s+\\|$)",
+            field,
+            re.IGNORECASE,
+        )
+        if match and match.group(1).strip().casefold() in heading_styles:
+            return True
+    return False
 
 
 class FieldRule:
@@ -750,12 +844,45 @@ class TableRule:
                     0,
                 )
             borders = table.find("w:tblPr/w:tblBorders", namespaces=NS)
+            def visible_border(element: etree._Element | None) -> bool:
+                return element is not None and _attr(element, "val") not in {
+                    None,
+                    "nil",
+                    "none",
+                }
+
+            header_cells = (
+                first_row.findall("w:tc", namespaces=NS)
+                if first_row is not None
+                else ()
+            )
+            has_header_bottom = (
+                borders is not None
+                and visible_border(borders.find("w:insideH", namespaces=NS))
+            ) or (
+                bool(header_cells)
+                and all(
+                    visible_border(
+                        cell.find("w:tcPr/w:tcBorders/w:bottom", namespaces=NS)
+                    )
+                    for cell in header_cells
+                )
+            )
             has_three_line = (
                 borders is not None
-                and borders.find("w:top", namespaces=NS) is not None
-                and borders.find("w:bottom", namespaces=NS) is not None
-                and borders.find("w:insideH", namespaces=NS) is not None
-                and borders.find("w:insideV", namespaces=NS) is None
+                and visible_border(borders.find("w:top", namespaces=NS))
+                and visible_border(borders.find("w:bottom", namespaces=NS))
+                and has_header_bottom
+                and not any(
+                    visible_border(borders.find(f"w:{name}", namespaces=NS))
+                    for name in (
+                        "left",
+                        "right",
+                        "start",
+                        "end",
+                        "insideV",
+                    )
+                )
             )
             if (
                 context.profile.tables.border_model == "three_line"
@@ -786,19 +913,41 @@ class ReferenceRule:
                 continue
             spacing = paragraph.find("w:pPr/w:spacing", namespaces=NS)
             ind = paragraph.find("w:pPr/w:ind", namespaces=NS)
+            line_rule = _attr(spacing, "lineRule") or "auto"
+            line = _float_attr_value(spacing, "line")
             actual = {
-                "line_spacing_pt": _pt_from_twips(_attr(spacing, "line")),
+                "line_spacing": (
+                    {
+                        "type": "exact",
+                        "value_pt": None if line is None else round(line / 20, 2),
+                    }
+                    if line_rule == "exact"
+                    else {
+                        "type": "multiple",
+                        "value": None if line is None else round(line / 240, 3),
+                    }
+                ),
                 "space_before_pt": _pt_from_twips(_attr(spacing, "before")) or 0,
                 "space_after_pt": _pt_from_twips(_attr(spacing, "after")) or 0,
                 "hanging_indent_mm": _mm_from_twips(_attr(ind, "hanging")) or 0,
             }
             wanted = {
-                "line_spacing_pt": expected.line_spacing_pt,
+                "line_spacing": {
+                    "type": "exact",
+                    "value_pt": expected.line_spacing_pt,
+                },
                 "space_before_pt": expected.space_before_pt,
                 "space_after_pt": expected.space_after_pt,
                 "hanging_indent_mm": expected.hanging_indent_mm,
             }
-            if any(not _close(actual[key], value) for key, value in wanted.items()):
+            if (
+                actual["line_spacing"] != wanted["line_spacing"]
+                or any(
+                    not _close(actual[key], value)
+                    for key, value in wanted.items()
+                    if key != "line_spacing"
+                )
+            ):
                 yield AuditFinding(
                     "REFERENCE.PARAGRAPH_FORMAT",
                     "violation",
@@ -861,32 +1010,86 @@ class HeaderFooterRule:
         body_section = (
             _section_for_paragraph(context, body_paragraph)
             if body_paragraph is not None
-            else len(context.section_elements) + 1
+            else None
         )
+        appendix_paragraph = next(
+            (
+                int(node.location.split(":")[1])
+                for node in context.semantic.paragraphs
+                if node.role == "appendix_heading"
+            ),
+            None,
+        )
+        appendix_section = (
+            _section_for_paragraph(context, appendix_paragraph)
+            if appendix_paragraph is not None
+            else None
+        )
+        front_section = _first_numbered_front_section(context, body_paragraph)
+        header_targets = _effective_story_targets(context, "header")
+        footer_targets = _effective_story_targets(context, "footer")
         for index, section in enumerate(context.section_elements, start=1):
             location = f"section:{index}"
-            header_refs = section.findall("w:headerReference", namespaces=NS)
-            footer_refs = section.findall("w:footerReference", namespaces=NS)
-            if index > 1 and (header_refs or footer_refs):
+            region = (
+                "appendix"
+                if appendix_section is not None and index >= appendix_section
+                else "body"
+                if body_section is not None and index >= body_section
+                else "front_matter"
+            )
+            linking = context.profile.headers_footers.section_linking
+            link_headers = {
+                "front_matter": False,
+                "body": linking.link_body_headers,
+                "appendix": linking.link_appendix_headers,
+            }[region]
+            link_footers = {
+                "front_matter": False,
+                "body": linking.link_body_footers,
+                "appendix": linking.link_appendix_footers,
+            }[region]
+            broken_links: list[str] = []
+            if (
+                index > 1
+                and link_headers
+                and header_targets[index - 1] != header_targets[index - 2]
+            ):
+                broken_links.append("header")
+            if (
+                index > 1
+                and link_footers
+                and footer_targets[index - 1] != footer_targets[index - 2]
+            ):
+                broken_links.append("footer")
+            if broken_links:
                 yield AuditFinding(
                     "HEADER.FOOTER.LINKING",
                     "warning",
                     location,
-                    "Explicit header or footer may break required section linking.",
+                    "Header or footer relationship target breaks required section linking.",
                     True,
-                    "explicit relationship",
+                    broken_links,
                     "linked to previous",
                 )
 
             page_number = section.find("w:pgNumType", namespaces=NS)
-            if index == body_section:
+            if body_section is not None and index == body_section:
                 expected_start = context.profile.fields.page_number.body_start
-            elif index == 1:
+            elif front_section is not None and index == front_section:
                 expected_start = context.profile.fields.page_number.front_start
             else:
                 expected_start = None
-            if expected_start is not None and _attr(page_number, "start") != str(
-                expected_start
+            actual_start = _attr(page_number, "start")
+            if (
+                expected_start is not None
+                and actual_start != str(expected_start)
+            ) or (
+                expected_start is None
+                and (
+                    (front_section is None or index < front_section)
+                    and (body_section is None or index < body_section)
+                )
+                and actual_start is not None
             ):
                 yield AuditFinding(
                     "HEADER.FOOTER.PAGE_RESET",
@@ -894,10 +1097,15 @@ class HeaderFooterRule:
                     location,
                     "Page numbering must reset at the configured region start.",
                     True,
-                    _attr(page_number, "start"),
+                    actual_start,
                     expected_start,
                 )
-            expected_format = "upperRoman" if index < body_section else "decimal"
+            if body_section is not None and index >= body_section:
+                expected_format = "decimal"
+            elif front_section is not None and index >= front_section:
+                expected_format = "upperRoman"
+            else:
+                expected_format = None
             actual_format = _attr(page_number, "fmt")
             if actual_format != expected_format:
                 yield AuditFinding(
@@ -909,6 +1117,109 @@ class HeaderFooterRule:
                     actual_format,
                     expected_format,
                 )
+
+            region_profile = getattr(context.profile.headers_footers, region)
+            if (
+                region_profile.header_enabled
+                and region_profile.header_source
+                in {"current_heading_1", "current_appendix_heading"}
+            ):
+                target = header_targets[index - 1]
+                paragraphs = tuple(
+                    node
+                    for node in context.semantic.headers
+                    if node.part_name == target
+                )
+                expected_role = (
+                    "heading_1"
+                    if region_profile.header_source == "current_heading_1"
+                    else "appendix_heading"
+                )
+                expected_styles = {
+                    name.casefold()
+                    for name in context.profile.styles[
+                        expected_role
+                    ].word_styles
+                }
+                if not any(
+                    _styleref_targets(field, expected_styles)
+                    for node in paragraphs
+                    for field in node.fields
+                ):
+                    yield AuditFinding(
+                        "HEADER.FOOTER.HEADER_SOURCE",
+                        "violation",
+                        location,
+                        "Dynamic header source must use the configured STYLEREF field.",
+                        True,
+                        "static or unrelated header",
+                        region_profile.header_source,
+                    )
+
+
+def _first_numbered_front_section(
+    context: AuditContext, body_paragraph: int | None
+) -> int | None:
+    numbered_roles = {
+        part.heading_role
+        for part in context.profile.front_matter.parts
+        if part.page_number_style != "none"
+    }
+    for node in context.semantic.paragraphs:
+        paragraph_number = int(node.location.split(":")[1])
+        if body_paragraph is not None and paragraph_number >= body_paragraph:
+            break
+        if node.role in numbered_roles or any(
+            _style_role_matches(context, role, node.style_id)
+            for role in numbered_roles
+        ):
+            return _section_for_paragraph(context, paragraph_number)
+    return None
+
+
+def _effective_story_targets(
+    context: AuditContext, kind: str
+) -> tuple[str | None, ...]:
+    relationship_by_id = {
+        relationship.id: resolve_relationship_target(
+            relationship.source_part, relationship.target
+        )
+        for relationship in context.semantic.relationships
+        if relationship.source_part == "word/document.xml"
+        and relationship.type.rsplit("/", 1)[-1] == kind
+        and relationship.target_mode != "External"
+    }
+    current: str | None = None
+    targets: list[str | None] = []
+    for section in context.section_elements:
+        references = section.findall(f"w:{kind}Reference", namespaces=NS)
+        default_reference = next(
+            (
+                reference
+                for reference in references
+                if (_attr(reference, "type") or "default") == "default"
+            ),
+            references[0] if references else None,
+        )
+        if default_reference is not None:
+            relationship_id = default_reference.get(
+                "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+            )
+            current = relationship_by_id.get(relationship_id)
+        targets.append(current)
+    return tuple(targets)
+
+
+def _styleref_targets(field: str, expected_styles: set[str]) -> bool:
+    normalized = re.sub(r"\s+", " ", field).strip()
+    match = re.match(
+        r'^STYLEREF\s+"?([^"\\]+?)"?(?:\s+\\|$)',
+        normalized,
+        re.IGNORECASE,
+    )
+    return bool(
+        match and match.group(1).strip().casefold() in expected_styles
+    )
 
 
 class PrivacyRule:
@@ -1101,8 +1412,20 @@ def _redacted_value(value: object) -> str:
         return "—"
     if isinstance(value, str) and value == "[REDACTED]":
         return value
-    rendered = _redact_text(canonical_json(value).strip())
-    return rendered.replace("|", "\\|").replace("\n", " ")
+    rendered = _redact_text(
+        value if isinstance(value, str) else canonical_json(value).strip()
+    )
+    return _markdown_cell(rendered)
+
+
+def _markdown_cell(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\n", "<br>")
+    )
 
 
 def render_audit_markdown(report: dict[str, object]) -> str:
@@ -1132,9 +1455,7 @@ def render_audit_markdown(report: dict[str, object]) -> str:
                 severity=finding["severity"],
                 rule_id=finding["rule_id"],
                 location=finding["location"],
-                message=_redact_text(str(finding["message"])).replace(
-                    "|", "\\|"
-                ),
+                message=_markdown_cell(_redact_text(str(finding["message"]))),
                 before=_redacted_value(finding["before"]),
                 after=_redacted_value(finding["after"]),
             )

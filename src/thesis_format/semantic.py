@@ -317,9 +317,9 @@ def _outline_role(
     return {0: "heading_1", 1: "heading_2", 2: "heading_3"}.get(level)
 
 
-def _numbering_style_map(
+def _numbering_level_map(
     package: OoxmlPackage,
-) -> dict[tuple[str, int], str]:
+) -> dict[tuple[str, int], tuple[str | None, str | None]]:
     if "word/numbering.xml" not in package.parts:
         return {}
     root = package.xml("word/numbering.xml")
@@ -332,7 +332,7 @@ def _numbering_style_map(
         if num_id and abstract_ids:
             abstract_by_num[num_id] = abstract_ids[0]
 
-    result: dict[tuple[str, int], str] = {}
+    result: dict[tuple[str, int], tuple[str | None, str | None]] = {}
     for abstract in root.xpath("./w:abstractNum", namespaces=NS):
         abstract_id = abstract.get(f"{{{W_NS}}}abstractNumId")
         if not abstract_id:
@@ -344,15 +344,19 @@ def _numbering_style_map(
         ]
         for level in abstract.xpath("./w:lvl", namespaces=NS):
             raw_level = level.get(f"{{{W_NS}}}ilvl")
-            style_ids = level.xpath("./w:pStyle/@w:val", namespaces=NS)
-            if raw_level is None or not style_ids:
+            if raw_level is None:
                 continue
             try:
                 level_index = int(raw_level)
             except ValueError:
                 continue
+            style_ids = level.xpath("./w:pStyle/@w:val", namespaces=NS)
+            formats = level.xpath("./w:numFmt/@w:val", namespaces=NS)
             for num_id in num_ids:
-                result[(num_id, level_index)] = style_ids[0]
+                result[(num_id, level_index)] = (
+                    style_ids[0] if style_ids else None,
+                    formats[0] if formats else None,
+                )
     return result
 
 
@@ -400,7 +404,7 @@ def _explicit_role(
     style_role: str | None,
     outline_role: str | None,
     pattern_roles: set[str],
-    numbering_styles: dict[tuple[str, int], str],
+    numbering_levels: dict[tuple[str, int], tuple[str | None, str | None]],
     styles: dict[str, _StyleMetadata],
     profile: FormatProfile,
 ) -> tuple[str | None, bool]:
@@ -408,7 +412,9 @@ def _explicit_role(
     numbering = _numbering_details(element)
     if numbering is not None:
         num_id, level, numbering_role = numbering
-        numbering_style_id = numbering_styles.get((num_id, level))
+        numbering_level = numbering_levels.get((num_id, level))
+        numbering_style_id = numbering_level[0] if numbering_level else None
+        numbering_format = numbering_level[1] if numbering_level else None
         numbering_style_role = _resolved_style_role(
             numbering_style_id,
             styles,
@@ -423,7 +429,10 @@ def _explicit_role(
             )
             if role is not None
         } | pattern_roles
-        if numbering_role in corroborating_roles:
+        if (
+            numbering_format not in {None, "bullet", "none"}
+            and numbering_role in corroborating_roles
+        ):
             candidates.add(numbering_role)
     if len(candidates) > 1:
         return None, True
@@ -537,7 +546,7 @@ def _resolve_paragraphs(
         style_id: metadata.name
         for style_id, metadata in style_metadata.items()
     }
-    numbering_styles = _numbering_style_map(package)
+    numbering_levels = _numbering_level_map(package)
     relationships = package.relationships()
     relationship_by_id = _relationship_map(relationships)
     markers = _marker_positions(elements, styles, profile)
@@ -575,7 +584,7 @@ def _resolve_paragraphs(
                 style_metadata,
             ),
             pattern_roles=pattern_roles,
-            numbering_styles=numbering_styles,
+            numbering_levels=numbering_levels,
             styles=style_metadata,
             profile=profile,
         )
