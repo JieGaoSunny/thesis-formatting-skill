@@ -106,6 +106,23 @@ def _append_note_reference(paragraph, kind: str, note_id: int) -> None:
     run._r.append(reference)
 
 
+def _wrap_cell_blocks(cell) -> None:
+    content = OxmlElement("w:sdtContent")
+    custom_xml = OxmlElement("w:customXml")
+    inserted = OxmlElement("w:ins")
+    inserted.set(qn("w:id"), "1")
+    inserted.set(qn("w:author"), "Editor")
+    for child in list(cell._tc):
+        if child.tag != qn("w:tcPr"):
+            inserted.append(child)
+    custom_xml.append(inserted)
+    content.append(custom_xml)
+    structured_document_tag = OxmlElement("w:sdt")
+    structured_document_tag.append(OxmlElement("w:sdtPr"))
+    structured_document_tag.append(content)
+    cell._tc.append(structured_document_tag)
+
+
 def _paragraph_with_note(
     document: Document,
     before: str,
@@ -654,6 +671,80 @@ def test_nested_table_reshape_is_detected_without_changing_outer_table(
     assert before_cells[0]["relationship_hash"] == after_cells[0]["relationship_hash"]
     assert before_cells[1]["relationship_hash"] != after_cells[1]["relationship_hash"]
     assert compare_snapshots(before, after)["equivalent"] is False
+
+
+@pytest.mark.parametrize("after_text", ["Changed", ""])
+def test_compare_detects_changed_or_deleted_text_in_structured_table_cell(
+    tmp_path: Path,
+    after_text: str,
+) -> None:
+    before_document = Document()
+    before_table = before_document.add_table(rows=1, cols=1)
+    before_table.cell(0, 0).text = "Original"
+    _wrap_cell_blocks(before_table.cell(0, 0))
+    after_document = Document()
+    after_table = after_document.add_table(rows=1, cols=1)
+    after_table.cell(0, 0).text = after_text
+    _wrap_cell_blocks(after_table.cell(0, 0))
+
+    before = extract_snapshot(
+        _save(before_document, tmp_path / f"structured-cell-before-{after_text}.docx"),
+        PROFILE,
+    )
+    after = extract_snapshot(
+        _save(after_document, tmp_path / f"structured-cell-after-{after_text}.docx"),
+        PROFILE,
+    )
+    before_cell = next(node for node in before["body"] if node["node_type"] == "table")
+    after_cell = next(node for node in after["body"] if node["node_type"] == "table")
+
+    assert before_cell["normalized_text"] == "Original"
+    assert after_cell["normalized_text"] == after_text
+    assert before_cell["table_geometry"] == after_cell["table_geometry"] == {
+        "row_count": 1,
+        "column_count": 1,
+        "row": 1,
+        "column": 1,
+        "grid_span": 1,
+        "v_merge": None,
+    }
+    assert compare_snapshots(before, after)["equivalent"] is False
+
+
+def test_extracts_structured_cell_paragraphs_and_nested_tables_in_order(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    outer = document.add_table(rows=1, cols=1)
+    cell = outer.cell(0, 0)
+    cell.text = "Before"
+    nested = cell.add_table(rows=1, cols=1)
+    nested.cell(0, 0).text = "Nested only"
+    cell.add_paragraph("After")
+    _wrap_cell_blocks(cell)
+
+    snapshot = extract_snapshot(
+        _save(document, tmp_path / "structured-cell-nested-table.docx"),
+        PROFILE,
+    )
+    cells = [node for node in snapshot["body"] if node["node_type"] == "table"]
+
+    assert [node["normalized_text"] for node in cells] == [
+        "Before \ufffc After",
+        "Nested only",
+    ]
+    assert cells[0]["table_geometry"] == {
+        "row_count": 1,
+        "column_count": 1,
+        "row": 1,
+        "column": 1,
+        "grid_span": 1,
+        "v_merge": None,
+    }
+    assert cells[1]["source_location"]["path"].startswith(
+        f'{cells[0]["source_location"]["path"]}/w:sdt[1]/w:sdtContent[1]/'
+        "w:customXml[1]/w:ins[1]/w:tbl[1]/"
+    )
 
 
 def test_duplicate_nodes_get_ordinals_and_prefix_collisions_extend() -> None:

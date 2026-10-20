@@ -419,9 +419,37 @@ def _belongs_to_container(
     return False
 
 
+def _story_blocks(
+    container: etree._Element,
+    base_path: str,
+) -> Iterable[tuple[etree._Element, str]]:
+    sibling_counts: Counter[str] = Counter()
+    for child in container:
+        qname = etree.QName(child)
+        sibling_counts[child.tag] += 1
+        prefix = child.prefix
+        if prefix is None:
+            prefix = next(
+                (
+                    candidate
+                    for candidate, namespace in NS.items()
+                    if namespace == qname.namespace
+                ),
+                "ns",
+            )
+        child_path = (
+            f"{base_path}/{prefix}:{qname.localname}"
+            f"[{sibling_counts[child.tag]}]"
+        )
+        if qname.localname in {"p", "tbl"} and qname.namespace == W_NS:
+            yield child, child_path
+        else:
+            yield from _story_blocks(child, child_path)
+
+
 def _cell_text(cell: etree._Element, profile: FormatProfile) -> str:
     pieces: list[str] = []
-    for child in cell:
+    for child, _ in _story_blocks(cell, ""):
         local = etree.QName(child).localname
         if local == "p":
             text = _clean_paragraph(child, profile)
@@ -559,9 +587,9 @@ def _append_table_nodes(
                 note_type=note_type,
             )
         )
-        for nested_index, nested_table in enumerate(
-            cell.xpath("./w:tbl", namespaces=NS), start=1
-        ):
+        for nested_table, nested_path in _story_blocks(cell, cell_path):
+            if etree.QName(nested_table).localname != "tbl":
+                continue
             _append_table_nodes(
                 result,
                 nested_table,
@@ -569,7 +597,7 @@ def _append_table_nodes(
                 profile,
                 object_identities,
                 part=part,
-                table_path=f"{cell_path}/w:tbl[{nested_index}]",
+                table_path=nested_path,
                 story=story,
                 index_offset=index_offset,
                 note_id=note_id,
@@ -654,34 +682,6 @@ def _story_nodes(
     return result
 
 
-def _note_story_blocks(
-    container: etree._Element,
-    base_path: str,
-) -> Iterable[tuple[etree._Element, str]]:
-    sibling_counts: Counter[str] = Counter()
-    for child in container:
-        qname = etree.QName(child)
-        sibling_counts[child.tag] += 1
-        prefix = child.prefix
-        if prefix is None:
-            prefix = next(
-                (
-                    candidate
-                    for candidate, namespace in NS.items()
-                    if namespace == qname.namespace
-                ),
-                "ns",
-            )
-        child_path = (
-            f"{base_path}/{prefix}:{qname.localname}"
-            f"[{sibling_counts[child.tag]}]"
-        )
-        if qname.localname in {"p", "tbl"} and qname.namespace == W_NS:
-            yield child, child_path
-        else:
-            yield from _note_story_blocks(child, child_path)
-
-
 def _note_nodes(
     package: OoxmlPackage,
     profile: FormatProfile,
@@ -712,7 +712,7 @@ def _note_nodes(
             pass
         base_path = f"/w:{kind}s/w:{kind}[@w:id='{note_id}']"
         story = f"{kind}:{note_id}"
-        for child, child_path in _note_story_blocks(note, base_path):
+        for child, child_path in _story_blocks(note, base_path):
             local = etree.QName(child).localname
             if local == "p":
                 text = _clean_paragraph(child, profile)
