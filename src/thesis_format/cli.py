@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import os
 import shutil
@@ -27,7 +28,7 @@ from thesis_format.profile import load_profile
 
 ExportFunction = Callable[[Path, Path, Path], Path | Sequence[Path] | None]
 PreviewFunction = Callable[[Path, Path, Path], Path | Sequence[Path] | None]
-PrivacyFunction = Callable[[Path, Path], Mapping[str, object]]
+PrivacyFunction = Callable[..., Mapping[str, object]]
 
 
 def _default_export_document(
@@ -57,7 +58,7 @@ def _default_preview_pdf(
 
 
 def _default_release_check(
-    source: Path, profile: Path
+    source: Path, profile: Path, denylist: Path | None = None
 ) -> Mapping[str, object]:
     try:
         from thesis_format.privacy import release_check
@@ -66,7 +67,9 @@ def _default_release_check(
             "optional privacy tooling is unavailable; install tooling that "
             "provides thesis_format.privacy.release_check"
         ) from error
-    return release_check(source, profile)
+    if denylist is None:
+        return release_check(source, profile)
+    return release_check(source, profile, denylist)
 
 
 @dataclass(frozen=True)
@@ -197,7 +200,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     release.add_argument("source", type=Path)
     release.add_argument("--profile", type=Path, required=True)
+    release.add_argument("--denylist", type=Path)
     release.add_argument("--report", type=Path, required=True)
+    release.add_argument("--markdown", type=Path)
     return parser
 
 
@@ -251,6 +256,49 @@ def _write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     print(path)
+
+
+def _write_private_reports(artifacts: Sequence[tuple[Path, str]]) -> None:
+    """Stage and publish privacy reports as one fail-closed operation."""
+
+    staged: list[tuple[Path, Path]] = []
+    published: list[Path] = []
+    try:
+        for destination, content in artifacts:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            stage = destination.with_name(f".privacy-stage-{uuid.uuid4().hex}")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(stage, flags, 0o600)
+            try:
+                with os.fdopen(descriptor, "wb", closefd=True) as stream:
+                    stream.write(content.encode("utf-8"))
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            except BaseException:
+                try:
+                    stage.unlink()
+                except OSError:
+                    pass
+                raise
+            staged.append((stage, destination))
+        for stage, destination in staged:
+            os.link(stage, destination, follow_symlinks=False)
+            published.append(destination)
+    except BaseException:
+        for destination in published:
+            try:
+                destination.unlink()
+            except OSError:
+                pass
+        raise
+    finally:
+        for stage, _ in staged:
+            try:
+                stage.unlink()
+            except OSError:
+                pass
 
 
 def _require_missing(path: Path, label: str) -> None:
@@ -677,22 +725,65 @@ def _run_preview(args: argparse.Namespace, function: PreviewFunction | None) -> 
 def _run_release_check(
     args: argparse.Namespace, function: PrivacyFunction | None
 ) -> int:
-    _require_file(args.source, "input")
-    _require_file(args.profile, "profile")
-    _reject_path_collisions(
-        ("source", args.source),
-        ("profile", args.profile),
-        ("report", args.report),
-    )
-    _require_missing(args.report, "release report")
+    if not args.source.exists() or (
+        not args.source.is_file() and not args.source.is_dir()
+    ):
+        raise ValueError("privacy scan source is invalid")
+    if not args.profile.is_file():
+        raise ValueError("privacy configuration is invalid")
+    try:
+        _reject_path_collisions(
+            ("source", args.source),
+            ("profile", args.profile),
+            ("denylist", args.denylist),
+            ("report", args.report),
+            ("markdown report", args.markdown),
+        )
+    except ValueError:
+        raise ValueError("privacy report destinations are unsafe") from None
+    if args.report.exists() or args.report.is_symlink():
+        raise ValueError("privacy report destination is unsafe")
+    if args.markdown is not None and (
+        args.markdown.exists() or args.markdown.is_symlink()
+    ):
+        raise ValueError("privacy report destination is unsafe")
     if function is None:
         raise RuntimeError(
             "optional privacy tooling is unavailable; install tooling that "
             "provides thesis_format.privacy.release_check"
         )
-    report = function(args.source, args.profile)
+    parameters = inspect.signature(function).parameters
+    accepts_denylist = len(parameters) >= 3 or any(
+        parameter.kind == inspect.Parameter.VAR_POSITIONAL
+        for parameter in parameters.values()
+    )
+    if args.denylist is not None and accepts_denylist:
+        report = function(args.source, args.profile, args.denylist)
+    elif args.denylist is not None and function is not _default_release_check:
+        raise ValueError("privacy provider does not accept a denylist")
+    else:
+        report = function(args.source, args.profile)
     validate_privacy_report(report)
-    _write_text(args.report, canonical_json(report))
+    artifacts = [(args.report, canonical_json(report))]
+    if args.markdown is not None:
+        from thesis_format.privacy import render_privacy_markdown
+
+        artifacts.append((args.markdown, render_privacy_markdown(report)))
+    try:
+        _write_private_reports(artifacts)
+    except OSError:
+        raise ValueError("privacy report publication failed") from None
+    privacy_module = sys.modules.get("thesis_format.privacy")
+    real_provider = (
+        function is _default_release_check
+        and privacy_module is not None
+        and hasattr(privacy_module, "render_privacy_markdown")
+    )
+    if real_provider:
+        print("privacy report written")
+    else:
+        for path, _ in artifacts:
+            print(path)
     return 1 if _is_unresolved(report) else 0
 
 

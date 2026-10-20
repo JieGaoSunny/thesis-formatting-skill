@@ -1,0 +1,5 @@
+# Synthetic private values used only by the privacy scanner tests.
+Secret Student
+private@example.test
+Café
+Users/secret-user
