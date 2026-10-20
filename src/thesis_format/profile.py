@@ -12,6 +12,34 @@ import yaml
 from thesis_format.contracts import ContractError, validate_format_profile
 
 
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects duplicate keys instead of overwriting them."""
+
+    def construct_mapping(
+        self,
+        node: yaml.MappingNode,
+        deep: bool = False,
+    ) -> dict[Any, Any]:
+        self.flatten_mapping(node)
+        seen: dict[Any, yaml.error.Mark] = {}
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                first_mark = seen.get(key)
+            except TypeError:
+                return super().construct_mapping(node, deep=deep)
+            if first_mark is not None:
+                duplicate_mark = key_node.start_mark
+                raise ContractError(
+                    f"duplicate mapping key {key!r} at "
+                    f"line {duplicate_mark.line + 1}, "
+                    f"column {duplicate_mark.column + 1}; first defined at "
+                    f"line {first_mark.line + 1}, column {first_mark.column + 1}"
+                )
+            seen[key] = key_node.start_mark
+        return super().construct_mapping(node, deep=deep)
+
+
 @dataclass(frozen=True, slots=True)
 class ProfileIdentity:
     id: str
@@ -443,7 +471,10 @@ def load_profile(path: str | Path) -> FormatProfile:
 
     profile_path = Path(path)
     try:
-        data = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+        data = yaml.load(
+            profile_path.read_text(encoding="utf-8"),
+            Loader=_UniqueKeySafeLoader,
+        )
     except yaml.YAMLError as error:
         raise ContractError(f"invalid YAML: {error}", cause=error) from error
     if not isinstance(data, dict):

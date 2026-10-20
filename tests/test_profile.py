@@ -28,6 +28,12 @@ def write_profile(tmp_path: Path, data: dict) -> Path:
     return path
 
 
+def write_profile_text(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "profile.yaml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
 def set_path(data: dict, path: tuple[str | int, ...], value: object) -> None:
     target = data
     for component in path[:-1]:
@@ -138,7 +144,28 @@ def test_page_fonts_and_normative_style_values_are_exact() -> None:
             "Liberation Sans" if role in heading_roles else "Liberation Serif"
         )
     assert profile.styles["reference"].paragraph.hanging_indent_mm == 10
-    assert profile.styles["figure_caption"].paragraph.keep_with_next is True
+    assert profile.styles["figure_caption"].paragraph.keep_with_next is False
+    assert profile.styles["table_caption"].paragraph.keep_with_next is True
+    assert profile.figures.caption_keep_with_object is True
+
+
+@pytest.mark.parametrize(
+    ("yaml_text", "duplicate_key"),
+    [
+        ("profile: first\nprofile: second\n", "profile"),
+        ("profile:\n  id: first\n  id: second\n", "id"),
+    ],
+)
+def test_duplicate_yaml_mapping_keys_are_rejected_with_location(
+    tmp_path: Path,
+    yaml_text: str,
+    duplicate_key: str,
+) -> None:
+    with pytest.raises(
+        ContractError,
+        match=rf"duplicate mapping key {duplicate_key!r}.*line \d+, column \d+",
+    ):
+        load_profile(write_profile_text(tmp_path, yaml_text))
 
 
 def test_numbering_front_matter_fields_headers_and_objects_are_exact() -> None:
