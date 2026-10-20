@@ -9,6 +9,7 @@ build
 dist
 examples
 tests
+render-environment.json
 *.pdf
 *.png
 *.log

@@ -187,14 +187,6 @@ def _require_missing(path: Path, label: str) -> None:
         raise ValueError(f"{label} already exists: {path}")
 
 
-def _remove_new_file(path: Path) -> None:
-    try:
-        if path.is_file() or path.is_symlink():
-            path.unlink()
-    except OSError:
-        pass
-
-
 def _require_empty_or_missing_directory(path: Path, label: str) -> None:
     if path.is_symlink() or (path.exists() and not path.is_dir()):
         raise ValueError(f"{label} already exists and is not a directory: {path}")
@@ -345,30 +337,25 @@ def _run_export(args: argparse.Namespace, function: ExportFunction | None) -> in
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     _require_missing(args.output, "PDF output")
     _require_missing(args.manifest, "render manifest")
-    try:
-        returned_paths = _provider_paths(
-            function(args.source, args.output, args.manifest)
+    returned_paths = _provider_paths(
+        function(args.source, args.output, args.manifest)
+    )
+    _require_nonempty_regular_file(args.output, "PDF output")
+    manifest = _validate_render_manifest_file(args.manifest)
+    actual_pdf_sha256 = _sha256_file(args.output)
+    expected_pdf_sha256 = manifest["raw_pdf_sha256"]
+    if actual_pdf_sha256 != expected_pdf_sha256:
+        raise ValueError(
+            "PDF output SHA-256 does not match render manifest "
+            f"raw_pdf_sha256: {args.output}"
         )
-        _require_nonempty_regular_file(args.output, "PDF output")
-        manifest = _validate_render_manifest_file(args.manifest)
-        actual_pdf_sha256 = _sha256_file(args.output)
-        expected_pdf_sha256 = manifest["raw_pdf_sha256"]
-        if actual_pdf_sha256 != expected_pdf_sha256:
-            raise ValueError(
-                "PDF output SHA-256 does not match render manifest "
-                f"raw_pdf_sha256: {args.output}"
-            )
-        _validate_returned_artifacts(
-            tuple(
-                path
-                for path in returned_paths
-                if path not in {args.output, args.manifest}
-            )
+    _validate_returned_artifacts(
+        tuple(
+            path
+            for path in returned_paths
+            if path not in {args.output, args.manifest}
         )
-    except BaseException:
-        _remove_new_file(args.output)
-        _remove_new_file(args.manifest)
-        raise
+    )
     print(args.output)
     return 0
 

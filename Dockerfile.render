@@ -47,7 +47,6 @@ RUN uv sync --frozen --all-extras --no-install-project
 COPY src ./src
 COPY rules ./rules
 COPY templates ./templates
-COPY render-environment.json ./
 RUN uv sync --frozen --all-extras \
     && test "$(soffice --version)" = "$(cat /usr/local/share/thesis-format/soffice-version.txt)" \
     && pdftoppm -v 2>&1 | head -1 \

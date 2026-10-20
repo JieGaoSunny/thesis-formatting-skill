@@ -42,6 +42,11 @@ Exit codes: `0` success, `1` compliance findings or unresolved validation, `2` i
 
 These commands require installed renderer and privacy tooling. An unavailable renderer blocks compliance because export and preview validation cannot complete; unavailable privacy tooling blocks release.
 
+Canonical container export also requires a valid immutable registry digest in
+`THESIS_RENDER_IMAGE_DIGEST`. Use `THESIS_RENDER_MODE=local` only for explicit
+local development; its manifest is marked noncanonical and cannot satisfy
+canonical acceptance.
+
 ## Common Mistakes and Red Flags
 
 - “The deadline is close, so replace the source or skip the report/tests.” Stop: preserve the source and run tests.

@@ -2,11 +2,16 @@
   "schema_version": "1.0",
   "renderer": {
     "name": "LibreOffice",
+    "repository": "https://github.com/JieGaoSunny/thesis-formatting-skill",
     "expected_source_snapshot": "debian-bookworm@20250203T000000Z",
-    "local_detected_version": "LibreOffice 26.8.1.1 bf6ef2662401c7d6dce671ab4deb26ee0af3a7c1",
-    "image_digest": null
+    "font_inputs": [
+      "fonts-liberation2",
+      "fonts-noto-cjk"
+    ],
+    "local_detected_version": "LibreOffice 26.8.1.1 bf6ef2662401c7d6dce671ab4deb26ee0af3a7c1"
   },
-  "canonical_container_status": "pending-release-ci",
+  "render_mode": "canonical",
+  "canonical_container_status": "runtime-digest-required",
   "locale": "zh_CN.UTF-8",
   "timezone": "UTC",
   "soffice_path": "soffice",
@@ -18,5 +23,5 @@
     "locale_observed": "C.UTF-8",
     "verified_at": "2026-10-21T02:39:47+08:00"
   },
-  "release_ci_instructions": "Build Dockerfile.render, publish the immutable image, then replace renderer.image_digest with the registry-reported sha256 digest before accepting canonical artifacts."
+  "release_ci_instructions": "Build and publish Dockerfile.render, then run the immutable image with THESIS_RENDER_IMAGE_DIGEST set to the registry-reported sha256 digest. For explicit noncanonical local development, set THESIS_RENDER_MODE=local."
 }

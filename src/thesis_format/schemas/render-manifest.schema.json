@@ -20,6 +20,15 @@
         "image_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       }
     },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "canonical"],
+      "properties": {
+        "mode": {"enum": ["canonical", "local"]},
+        "canonical": {"type": "boolean"}
+      }
+    },
     "font_manifest_hash": {"$ref": "#/$defs/sha256"},
     "locale": {"type": "string", "minLength": 2},
     "page_dimensions": {"$ref": "#/$defs/dimensions"},

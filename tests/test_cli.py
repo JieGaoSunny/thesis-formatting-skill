@@ -724,7 +724,8 @@ def test_export_rejects_noop_or_empty_artifact_provider(
     captured = capsys.readouterr()
     assert result == 2
     assert str(output) not in captured.out
-    assert not output.exists()
+    if output.exists():
+        assert output.read_bytes() == b""
     assert not manifest.exists()
 
 
@@ -789,6 +790,45 @@ def test_export_rejects_existing_manifest_before_provider(
     assert result == 2
 
 
+@pytest.mark.parametrize("competing_destination", ("pdf", "manifest"))
+def test_export_provider_failure_preserves_racing_destination(
+    tmp_path: Path,
+    competing_destination: str,
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+    competitor = b"competitor-owned artifact"
+
+    def provider(
+        _source: Path, requested_output: Path, requested_manifest: Path
+    ) -> list[Path]:
+        destination = (
+            requested_output
+            if competing_destination == "pdf"
+            else requested_manifest
+        )
+        destination.write_bytes(competitor)
+        raise RuntimeError("provider lost publication race")
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
+        dependencies=cli.CliDependencies(export_document=provider),
+    )
+
+    destination = output if competing_destination == "pdf" else manifest
+    assert result == 2
+    assert destination.read_bytes() == competitor
+
+
 def test_export_rejects_invalid_returned_render_manifest(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -820,8 +860,8 @@ def test_export_rejects_invalid_returned_render_manifest(
     captured = capsys.readouterr()
     assert result == 2
     assert str(output) not in captured.out
-    assert not output.exists()
-    assert not manifest.exists()
+    assert output.read_bytes() == b"pdf"
+    assert manifest.read_text(encoding="utf-8") == "{}"
 
 
 def test_export_rejects_arbitrary_text_manifest(

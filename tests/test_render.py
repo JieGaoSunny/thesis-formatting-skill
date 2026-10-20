@@ -84,6 +84,14 @@ def detected_version(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def canonical_runtime_digest(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "THESIS_RENDER_IMAGE_DIGEST", "sha256:" + "a" * 64
+    )
+    monkeypatch.delenv("THESIS_RENDER_MODE", raising=False)
+
+
 def test_inspect_pdf_produces_valid_manifest_and_matches_baseline(
     tmp_path: Path, detected_version: None
 ) -> None:
@@ -125,19 +133,69 @@ def test_inspect_pdf_rejects_corrupt_input(tmp_path: Path) -> None:
         inspect_pdf(pdf, _environment())
 
 
-def test_inspect_pdf_requires_canonical_image_digest(tmp_path: Path) -> None:
+def test_inspect_pdf_requires_canonical_image_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     pdf = tmp_path / "demo.pdf"
     _make_pdf(pdf)
+    monkeypatch.delenv("THESIS_RENDER_IMAGE_DIGEST")
 
-    with pytest.raises(CanonicalEnvironmentError, match="image digest"):
+    with pytest.raises(CanonicalEnvironmentError, match="THESIS_RENDER_IMAGE_DIGEST"):
         inspect_pdf(pdf, _environment(image_digest=None))
 
 
+def test_canonical_image_digest_must_come_from_runtime_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    detected_version: None,
+) -> None:
+    pdf = tmp_path / "demo.pdf"
+    _make_pdf(pdf)
+    monkeypatch.delenv("THESIS_RENDER_IMAGE_DIGEST", raising=False)
+
+    with pytest.raises(CanonicalEnvironmentError, match="THESIS_RENDER_IMAGE_DIGEST"):
+        inspect_pdf(pdf, _environment())
+
+    digest = "sha256:" + "b" * 64
+    monkeypatch.setenv("THESIS_RENDER_IMAGE_DIGEST", digest)
+    manifest = inspect_pdf(pdf, _environment())
+
+    assert manifest["renderer"]["image_digest"] == digest
+    assert manifest["environment"] == {
+        "mode": "canonical",
+        "canonical": True,
+    }
+
+
+def test_explicit_local_mode_records_noncanonical_renderer_fingerprint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    detected_version: None,
+) -> None:
+    pdf = tmp_path / "demo.pdf"
+    _make_pdf(pdf)
+    environment = _environment(image_digest=None)
+    environment["render_mode"] = "local"
+    monkeypatch.delenv("THESIS_RENDER_IMAGE_DIGEST", raising=False)
+
+    first = inspect_pdf(pdf, environment)
+    second = inspect_pdf(pdf, environment)
+
+    assert first["renderer"]["image_digest"].startswith("sha256:")
+    assert first["renderer"]["image_digest"] == second["renderer"]["image_digest"]
+    assert first["environment"] == {"mode": "local", "canonical": False}
+    with pytest.raises(CanonicalEnvironmentError, match="noncanonical"):
+        render.require_canonical_render_manifest(first)
+
+
 def test_cli_export_fails_canonical_acceptance_while_digest_is_pending(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "input.docx"
     source.write_bytes(b"docx")
+    monkeypatch.delenv("THESIS_RENDER_IMAGE_DIGEST")
 
     result = cli.main(
         [
@@ -151,7 +209,7 @@ def test_cli_export_fails_canonical_acceptance_while_digest_is_pending(
     )
 
     assert result == 2
-    assert "pinned container image digest" in capsys.readouterr().err
+    assert "THESIS_RENDER_IMAGE_DIGEST" in capsys.readouterr().err
     assert not (tmp_path / "output.pdf").exists()
 
 
@@ -161,7 +219,7 @@ def test_render_environment_and_dockerfile_do_not_claim_unpublished_image() -> N
     )
     dockerfile = (ROOT / "Dockerfile.render").read_text(encoding="utf-8")
 
-    assert environment["renderer"]["image_digest"] is None
+    assert "image_digest" not in environment["renderer"]
     assert "version" not in environment["renderer"]
     assert environment["renderer"]["expected_source_snapshot"].endswith(
         "20250203T000000Z"
@@ -169,7 +227,7 @@ def test_render_environment_and_dockerfile_do_not_claim_unpublished_image() -> N
     assert environment["renderer"]["local_detected_version"].startswith(
         "LibreOffice "
     )
-    assert environment["canonical_container_status"] == "pending-release-ci"
+    assert environment["canonical_container_status"] == "runtime-digest-required"
     assert (
         "python:3.12.11-slim-bookworm@sha256:"
         "519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7"
@@ -181,6 +239,11 @@ def test_render_environment_and_dockerfile_do_not_claim_unpublished_image() -> N
     assert "rm -f /etc/apt/sources.list.d/debian.sources" in dockerfile
     assert "soffice --version | tee" in dockerfile
     assert "test -s /usr/local/share/thesis-format/soffice-version.txt" in dockerfile
+    assert "COPY render-environment.json" not in dockerfile
+    assert "THESIS_RENDER_IMAGE_DIGEST" not in dockerfile
+    assert "render-environment.json" in (
+        ROOT / ".dockerignore"
+    ).read_text(encoding="utf-8").splitlines()
 
 
 def test_detect_soffice_version_records_command_output(
@@ -429,6 +492,9 @@ def test_export_document_failure_leaves_no_outputs_and_can_retry(
         monkeypatch.setattr(render, "inspect_pdf", real_inspect)
     else:
         monkeypatch.undo()
+        monkeypatch.setenv(
+            "THESIS_RENDER_IMAGE_DIGEST", "sha256:" + "a" * 64
+        )
         monkeypatch.setattr(render, "_run_soffice", _fake_soffice_conversion)
         monkeypatch.setattr(
             render,
@@ -444,13 +510,114 @@ def test_export_document_failure_leaves_no_outputs_and_can_retry(
     assert manifest_path.is_file()
 
 
+def test_export_document_records_supplied_runtime_image_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "input.docx"
+    source.write_bytes(b"docx")
+    output = tmp_path / "output.pdf"
+    manifest_path = tmp_path / "manifest.json"
+    digest = "sha256:" + "d" * 64
+    monkeypatch.setenv("THESIS_RENDER_IMAGE_DIGEST", digest)
+    monkeypatch.setattr(render, "_run_soffice", _fake_soffice_conversion)
+    monkeypatch.setattr(
+        render,
+        "_detect_soffice_version",
+        lambda _environment: "LibreOffice 24.2.7.2 actual-build",
+    )
+
+    export_document(source, output, manifest_path, _environment())
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["renderer"]["image_digest"] == digest
+    assert manifest["environment"] == {
+        "mode": "canonical",
+        "canonical": True,
+    }
+
+
+@pytest.mark.parametrize("competing_destination", ("pdf", "manifest"))
+def test_export_document_never_clobbers_racing_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    competing_destination: str,
+) -> None:
+    source = tmp_path / "input.docx"
+    source.write_bytes(b"docx")
+    output = tmp_path / "output.pdf"
+    manifest_path = tmp_path / "manifest.json"
+    competitor = b"competitor-owned artifact"
+    monkeypatch.setattr(render, "_run_soffice", _fake_soffice_conversion)
+    monkeypatch.setattr(
+        render,
+        "_detect_soffice_version",
+        lambda _environment: "LibreOffice 24.2.7.2 actual-build",
+    )
+    monkeypatch.setenv(
+        "THESIS_RENDER_IMAGE_DIGEST", "sha256:" + "c" * 64
+    )
+    real_inspect = render.inspect_pdf
+
+    def inspect_with_race(*args, **kwargs):
+        manifest = real_inspect(*args, **kwargs)
+        destination = output if competing_destination == "pdf" else manifest_path
+        destination.write_bytes(competitor)
+        return manifest
+
+    monkeypatch.setattr(render, "inspect_pdf", inspect_with_race)
+
+    with pytest.raises(RenderError, match="already exists"):
+        export_document(source, output, manifest_path, _environment())
+
+    destination = output if competing_destination == "pdf" else manifest_path
+    other = manifest_path if competing_destination == "pdf" else output
+    assert destination.read_bytes() == competitor
+    assert not other.exists()
+    assert not list(tmp_path.glob(".render-*"))
+
+
+def test_second_publication_failure_does_not_remove_replacement_first_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "input.docx"
+    source.write_bytes(b"docx")
+    output = tmp_path / "output.pdf"
+    manifest_path = tmp_path / "manifest.json"
+    replacement = b"competitor replacement"
+    blocker = b"competitor manifest"
+    monkeypatch.setattr(render, "_run_soffice", _fake_soffice_conversion)
+    monkeypatch.setattr(
+        render,
+        "_detect_soffice_version",
+        lambda _environment: "LibreOffice 24.2.7.2 actual-build",
+    )
+    real_publish = render._publish_exclusive
+
+    def publish_with_replacement(staged: Path, destination: Path):
+        if destination == manifest_path:
+            output.unlink()
+            output.write_bytes(replacement)
+            manifest_path.write_bytes(blocker)
+        return real_publish(staged, destination)
+
+    monkeypatch.setattr(render, "_publish_exclusive", publish_with_replacement)
+
+    with pytest.raises(RenderError, match="already exists"):
+        export_document(source, output, manifest_path, _environment())
+
+    assert output.read_bytes() == replacement
+    assert manifest_path.read_bytes() == blocker
+    assert not list(tmp_path.glob(".render-*"))
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(not SOFFICE.is_file(), reason="local LibreOffice unavailable")
 def test_local_soffice_exports_real_docx(tmp_path: Path) -> None:
     source = ROOT / "templates" / "apple-university-template.docx"
-    environment = _environment(
-        image_digest="sha256:" + hashlib.sha256(SOFFICE.read_bytes()).hexdigest()
-    )
+    environment = _environment(image_digest=None)
+    environment["render_mode"] = "local"
 
     outputs = export_document(
         source,

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import errno
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import uuid
 from collections.abc import Mapping, Sequence
@@ -29,6 +31,9 @@ DEFAULT_DPI = 144
 DEFAULT_TIMEOUT_SECONDS = 120
 _IMAGE_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _NUMERIC_SELECTOR = re.compile(r"^-?\d+$")
+_RENDER_MODES = frozenset({"canonical", "local"})
+_IMAGE_DIGEST_ENV = "THESIS_RENDER_IMAGE_DIGEST"
+_RENDER_MODE_ENV = "THESIS_RENDER_MODE"
 
 
 class RenderError(RuntimeError):
@@ -77,10 +82,20 @@ def _load_environment(
     renderer = loaded.get("renderer")
     if not isinstance(renderer, Mapping):
         raise CanonicalEnvironmentError("render environment is missing renderer")
-    digest = renderer.get("image_digest")
-    if not isinstance(digest, str) or not _IMAGE_DIGEST.fullmatch(digest):
+    configured_mode = loaded.get("render_mode")
+    environment_mode = os.environ.get(_RENDER_MODE_ENV)
+    mode = environment_mode or configured_mode or "canonical"
+    if mode not in _RENDER_MODES:
         raise CanonicalEnvironmentError(
-            "canonical rendering requires a pinned container image digest"
+            f"render mode must be one of {sorted(_RENDER_MODES)!r}"
+        )
+    digest = os.environ.get(_IMAGE_DIGEST_ENV)
+    if mode == "canonical" and (
+        not isinstance(digest, str) or not _IMAGE_DIGEST.fullmatch(digest)
+    ):
+        raise CanonicalEnvironmentError(
+            "canonical rendering requires a valid "
+            f"{_IMAGE_DIGEST_ENV}=sha256:<64 lowercase hex characters>"
         )
     if not isinstance(renderer.get("name"), str) or not renderer["name"]:
         raise CanonicalEnvironmentError("render environment is missing renderer name")
@@ -92,7 +107,52 @@ def _load_environment(
     selected_locale = loaded.get("locale")
     if not isinstance(selected_locale, str) or len(selected_locale) < 2:
         raise CanonicalEnvironmentError("render environment is missing locale")
+    loaded["render_mode"] = mode
+    loaded["_runtime_image_digest"] = digest
     return loaded
+
+
+def _renderer_image_digest(
+    environment: Mapping[str, Any], detected_version: str
+) -> str:
+    if environment["render_mode"] == "canonical":
+        return str(environment["_runtime_image_digest"])
+    renderer = environment["renderer"]
+    configured_soffice = str(environment.get("soffice_path") or "soffice")
+    soffice = Path(shutil.which(configured_soffice) or configured_soffice)
+    executable_sha256 = (
+        _sha256_file(soffice) if soffice.is_file() else "unavailable"
+    )
+    fingerprint = canonical_sha256(
+        {
+            "renderer": {
+                "name": renderer["name"],
+                "version": detected_version,
+                "executable_sha256": executable_sha256,
+                "repository": renderer.get("repository"),
+                "expected_source_snapshot": renderer["expected_source_snapshot"],
+                "font_inputs": renderer.get("font_inputs", []),
+            },
+            "locale": environment["locale"],
+            "timezone": environment.get("timezone", "UTC"),
+        }
+    )
+    return f"sha256:{fingerprint}"
+
+
+def require_canonical_render_manifest(manifest: Mapping[str, Any]) -> None:
+    """Reject a structurally valid manifest produced in local development mode."""
+
+    validate_render_manifest(manifest)
+    environment = manifest.get("environment")
+    if (
+        not isinstance(environment, Mapping)
+        or environment.get("mode") != "canonical"
+        or environment.get("canonical") is not True
+    ):
+        raise CanonicalEnvironmentError(
+            "canonical acceptance rejects noncanonical local render manifests"
+        )
 
 
 def _destination_array(value: Any) -> Any:
@@ -305,6 +365,7 @@ def inspect_pdf(
         "extracted_pages": extracted_pages,
     }
     renderer = selected_environment["renderer"]
+    render_mode = str(selected_environment["render_mode"])
     manifest: dict[str, object] = {
         "schema_version": "1.0",
         "raw_pdf_sha256": raw_pdf_sha256,
@@ -312,7 +373,13 @@ def inspect_pdf(
         "renderer": {
             "name": renderer["name"],
             "version": detected_version,
-            "image_digest": renderer["image_digest"],
+            "image_digest": _renderer_image_digest(
+                selected_environment, detected_version
+            ),
+        },
+        "environment": {
+            "mode": render_mode,
+            "canonical": render_mode == "canonical",
         },
         "font_manifest_hash": canonical_sha256(font_manifest),
         "locale": selected_environment["locale"],
@@ -380,6 +447,102 @@ def _detect_soffice_version(environment: Mapping[str, Any]) -> str:
     if not version:
         raise RenderError("LibreOffice reported an empty version")
     return version
+
+
+def _file_identity(path: Path) -> tuple[int, int]:
+    try:
+        details = path.stat(follow_symlinks=False)
+    except OSError as error:
+        raise RenderError(f"published artifact cannot be inspected: {path}") from error
+    if not stat.S_ISREG(details.st_mode):
+        raise RenderError(f"published artifact is not a regular file: {path}")
+    return details.st_dev, details.st_ino
+
+
+def _unlink_exact_artifact(
+    path: Path,
+    identity: tuple[int, int],
+    expected_sha256: str | None = None,
+) -> None:
+    try:
+        if _file_identity(path) != identity:
+            return
+        if (
+            expected_sha256 is not None
+            and _sha256_file(path) != expected_sha256
+        ):
+            return
+        path.unlink()
+    except (OSError, RenderError):
+        return
+
+
+def _publish_exclusive(
+    staged: Path, destination: Path
+) -> tuple[tuple[int, int], str]:
+    expected_sha256 = _sha256_file(staged)
+    staged_identity = _file_identity(staged)
+    created_identity: tuple[int, int] | None = None
+    try:
+        try:
+            os.link(staged, destination, follow_symlinks=False)
+            linked_identity = _file_identity(destination)
+            if linked_identity != staged_identity:
+                raise RenderError(
+                    f"published artifact inode mismatch: {destination}"
+                )
+            created_identity = linked_identity
+        except FileExistsError as error:
+            raise RenderError(f"artifact destination already exists: {destination}") from error
+        except OSError as error:
+            if error.errno not in {
+                errno.EXDEV,
+                errno.EPERM,
+                errno.EACCES,
+                errno.ENOTSUP,
+                errno.EOPNOTSUPP,
+            }:
+                raise RenderError(
+                    f"could not publish artifact: {destination}"
+                ) from error
+            try:
+                descriptor = os.open(
+                    destination,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    staged.stat().st_mode & 0o777,
+                )
+            except FileExistsError as exclusive_error:
+                raise RenderError(
+                    f"artifact destination already exists: {destination}"
+                ) from exclusive_error
+            descriptor_details = os.fstat(descriptor)
+            created_identity = (
+                descriptor_details.st_dev,
+                descriptor_details.st_ino,
+            )
+            try:
+                with staged.open("rb") as source, os.fdopen(descriptor, "wb") as target:
+                    shutil.copyfileobj(source, target)
+                    target.flush()
+                    os.fsync(target.fileno())
+            except BaseException:
+                if created_identity is not None:
+                    _unlink_exact_artifact(destination, created_identity)
+                raise
+
+        if _file_identity(destination) != created_identity:
+            raise RenderError(
+                f"published artifact inode mismatch: {destination}"
+            )
+        if _sha256_file(destination) != expected_sha256:
+            raise RenderError(
+                f"published artifact hash mismatch: {destination}"
+            )
+        return created_identity, expected_sha256
+    except BaseException:
+        if created_identity is not None:
+            _unlink_exact_artifact(destination, created_identity, expected_sha256)
+        raise
 
 
 def export_document(
@@ -498,18 +661,13 @@ def export_document(
             raise RenderError(
                 "temporary render manifest raw_pdf_sha256 does not match PDF"
             )
-        published_manifest = False
-        published_pdf = False
+        published_pdf: tuple[tuple[int, int], str] | None = None
         try:
-            os.replace(temporary_manifest, manifest_output)
-            published_manifest = True
-            os.replace(temporary_pdf, output)
-            published_pdf = True
+            published_pdf = _publish_exclusive(temporary_pdf, output)
+            _publish_exclusive(temporary_manifest, manifest_output)
         except BaseException:
-            if published_pdf:
-                output.unlink(missing_ok=True)
-            if published_manifest:
-                manifest_output.unlink(missing_ok=True)
+            if published_pdf is not None:
+                _unlink_exact_artifact(output, *published_pdf)
             raise
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -625,4 +783,5 @@ __all__ = [
     "export_document",
     "inspect_pdf",
     "preview_pdf",
+    "require_canonical_render_manifest",
 ]
