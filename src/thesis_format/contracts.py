@@ -133,11 +133,18 @@ def shortest_unique_digest_prefixes(
         if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
             raise ValueError(f"not a lowercase SHA-256 digest: {digest!r}")
 
-    distinct = set(values)
-    lengths: dict[str, int] = {digest: minimum for digest in distinct}
+    seen: dict[str, int] = {}
+    for index, digest in enumerate(values):
+        if digest in seen:
+            raise ValueError(
+                f"duplicate full digest at indexes {seen[digest]} and {index}: {digest}"
+            )
+        seen[digest] = index
+
+    lengths: dict[str, int] = {digest: minimum for digest in values}
     while True:
         groups: dict[str, list[str]] = {}
-        for digest in distinct:
+        for digest in values:
             groups.setdefault(digest[: lengths[digest]], []).append(digest)
         collisions = [group for group in groups.values() if len(group) > 1]
         if not collisions:
@@ -193,7 +200,19 @@ def _validate_collection(
     id_field: str,
 ) -> None:
     payloads = [_without(item, id_field) for item in items]
-    expected_ids = deterministic_ids(payloads)
+    full_digests = [canonical_sha256(payload) for payload in payloads]
+    seen_digests: dict[str, int] = {}
+    for index, digest in enumerate(full_digests):
+        if digest in seen_digests:
+            raise ContractError(
+                (
+                    "duplicate semantic key/full digest; "
+                    f"duplicates item {seen_digests[digest]}"
+                ),
+                path + (index, id_field),
+            )
+        seen_digests[digest] = index
+    expected_ids = shortest_unique_digest_prefixes(full_digests)
     for index, (item, expected_id) in enumerate(zip(items, expected_ids, strict=True)):
         if item[id_field] != expected_id:
             raise ContractError(
@@ -294,6 +313,15 @@ def _validate_privacy(report: dict[str, Any]) -> None:
 
 
 def _validate_render(report: dict[str, Any]) -> None:
+    expected_font_manifest_hash = canonical_sha256(report["font_manifest"])
+    if report["font_manifest_hash"] != expected_font_manifest_hash:
+        raise ContractError(
+            (
+                "font_manifest_hash must equal the canonical font_manifest digest "
+                f"{expected_font_manifest_hash!r}"
+            ),
+            ("font_manifest_hash",),
+        )
     pages = report["pages"]
     page_numbers = [page["page"] for page in pages]
     expected_numbers = list(range(1, len(pages) + 1))
@@ -312,14 +340,27 @@ def _validate_render(report: dict[str, Any]) -> None:
                 "page dimensions must match page_dimensions",
                 ("pages", index),
             )
-    page_set = set(page_numbers)
+    pages_by_number = {page["page"]: page for page in pages}
     names: set[str] = set()
     for index, destination in enumerate(report["named_destinations"]):
-        if destination["page"] not in page_set:
+        destination_page = pages_by_number.get(destination["page"])
+        if destination_page is None:
             raise ContractError(
                 "named destination references a missing page",
                 ("named_destinations", index, "page"),
             )
+        for coordinate, dimension in (
+            ("x_pt", "width_pt"),
+            ("y_pt", "height_pt"),
+        ):
+            if destination[coordinate] > destination_page[dimension]:
+                raise ContractError(
+                    (
+                        f"{coordinate} must be within referenced page {dimension} "
+                        f"{destination_page[dimension]!r}"
+                    ),
+                    ("named_destinations", index, coordinate),
+                )
         if destination["name"] in names:
             raise ContractError(
                 "named destination names must be unique",

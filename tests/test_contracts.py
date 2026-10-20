@@ -12,6 +12,7 @@ from thesis_format.contracts import (
     canonical_json,
     load_schema,
     shortest_unique_digest_prefixes,
+    stable_id,
     validate_contract,
 )
 
@@ -29,6 +30,12 @@ CONTRACTS = {
 
 def fixture(name: str) -> dict:
     return json.loads((FIXTURES / CONTRACTS[name]).read_text(encoding="utf-8"))
+
+
+def refresh_id(report: dict, id_field: str) -> None:
+    report[id_field] = stable_id(
+        {key: value for key, value in report.items() if key != id_field}
+    )
 
 
 @pytest.mark.parametrize("contract_name", CONTRACTS)
@@ -112,6 +119,20 @@ def test_collision_id_length_is_verified() -> None:
         validate_contract("audit", audit)
 
 
+@pytest.mark.parametrize(
+    "contract_name,collection",
+    [("audit", "findings"), ("transformation-result", "changes")],
+)
+def test_duplicate_collection_semantic_keys_are_rejected(
+    contract_name: str, collection: str
+) -> None:
+    report = fixture(contract_name)
+    report[collection].append(copy.deepcopy(report[collection][0]))
+
+    with pytest.raises(ContractError, match=r"duplicate semantic key|full digest"):
+        validate_contract(contract_name, report)
+
+
 def test_privacy_contract_cannot_contain_private_matched_text() -> None:
     report = fixture("privacy-report")
     report["matches"][0]["matched_text"] = "private"
@@ -125,6 +146,41 @@ def test_render_destinations_must_reference_existing_pages() -> None:
     manifest["named_destinations"][0]["page"] = 99
 
     with pytest.raises(ContractError, match=r"named_destinations"):
+        validate_contract("render-manifest", manifest)
+
+
+def test_render_font_manifest_hash_must_match_canonical_manifest() -> None:
+    manifest = fixture("render-manifest")
+    manifest["font_manifest_hash"] = "0" * 64
+
+    with pytest.raises(ContractError, match=r"font_manifest_hash"):
+        validate_contract("render-manifest", manifest)
+
+
+def test_render_destination_coordinates_allow_page_boundaries() -> None:
+    manifest = fixture("render-manifest")
+    page = manifest["pages"][0]
+    destination = manifest["named_destinations"][0]
+    destination["x_pt"] = page["width_pt"]
+    destination["y_pt"] = page["height_pt"]
+    refresh_id(manifest, "render_id")
+
+    validate_contract("render-manifest", manifest)
+
+
+@pytest.mark.parametrize(
+    "coordinate,dimension",
+    [("x_pt", "width_pt"), ("y_pt", "height_pt")],
+)
+def test_render_destination_coordinates_must_lie_within_referenced_page(
+    coordinate: str, dimension: str
+) -> None:
+    manifest = fixture("render-manifest")
+    manifest["named_destinations"][0][coordinate] = (
+        manifest["pages"][0][dimension] + 0.001
+    )
+
+    with pytest.raises(ContractError, match=rf"named_destinations.*{coordinate}"):
         validate_contract("render-manifest", manifest)
 
 
