@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -761,6 +762,164 @@ def test_export_stages_provider_outputs_before_validation_and_publish(
     assert not list(manifest.parent.glob(".thesis-export-*"))
 
 
+def test_export_publishes_validated_descriptors_after_staged_paths_are_replaced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+    replacement_pdf = b"replacement PDF pathname"
+    replacement_manifest = b'{"replacement": true}'
+
+    def export(_source: Path, pdf: Path, report: Path) -> list[Path]:
+        pdf.write_bytes(PDF_FIXTURE.read_bytes())
+        report.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
+        return [pdf, report]
+
+    real_open_staged = cli._open_staged_artifact
+    replacements = {
+        output: replacement_pdf,
+        manifest: replacement_manifest,
+    }
+
+    def open_with_staged_replacement(
+        path: Path, destination: Path
+    ) -> cli._StagedArtifact:
+        artifact = real_open_staged(path, destination)
+        path.unlink()
+        path.write_bytes(replacements[destination])
+        return artifact
+
+    monkeypatch.setattr(cli, "_open_staged_artifact", open_with_staged_replacement)
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
+        dependencies=cli.CliDependencies(export_document=export),
+    )
+
+    assert result == 0
+    assert output.read_bytes() == PDF_FIXTURE.read_bytes()
+    assert manifest.read_bytes() == RENDER_MANIFEST_FIXTURE.read_bytes()
+
+
+def test_export_reserves_both_destinations_before_copying(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+    competitor = b"competitor manifest"
+    copy_calls = 0
+
+    def export(_source: Path, pdf: Path, report: Path) -> list[Path]:
+        pdf.write_bytes(PDF_FIXTURE.read_bytes())
+        report.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
+        return [pdf, report]
+
+    real_open = os.open
+    real_copyfileobj = shutil.copyfileobj
+
+    def open_with_manifest_collision(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        selected = Path(path)
+        if selected == output and flags & os.O_EXCL and not manifest.exists():
+            manifest.write_bytes(competitor)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    def counted_copyfileobj(*args: object, **kwargs: object) -> None:
+        nonlocal copy_calls
+        copy_calls += 1
+        real_copyfileobj(*args, **kwargs)
+
+    monkeypatch.setattr(
+        os,
+        "link",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno.EXDEV, "cross-device link")
+        ),
+    )
+    monkeypatch.setattr(os, "open", open_with_manifest_collision)
+    monkeypatch.setattr(shutil, "copyfileobj", counted_copyfileobj)
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
+        dependencies=cli.CliDependencies(export_document=export),
+    )
+
+    assert result == 2
+    assert copy_calls == 0
+    assert not output.exists()
+    assert manifest.read_bytes() == competitor
+
+
+def test_export_detects_final_path_replacement_without_deleting_competitor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+    competitor = b"competitor replacement"
+
+    def export(_source: Path, pdf: Path, report: Path) -> list[Path]:
+        pdf.write_bytes(PDF_FIXTURE.read_bytes())
+        report.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
+        return [pdf, report]
+
+    real_copyfileobj = shutil.copyfileobj
+    replaced = False
+
+    def copy_with_final_replacement(*args: object, **kwargs: object) -> None:
+        nonlocal replaced
+        real_copyfileobj(*args, **kwargs)
+        if not replaced:
+            output.unlink()
+            output.write_bytes(competitor)
+            replaced = True
+
+    monkeypatch.setattr(shutil, "copyfileobj", copy_with_final_replacement)
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
+        dependencies=cli.CliDependencies(export_document=export),
+    )
+
+    assert result == 2
+    assert output.read_bytes() == competitor
+    assert not manifest.exists()
+
+
 @pytest.mark.parametrize("competing_destination", ("pdf", "manifest"))
 def test_export_final_window_race_fails_without_touching_competitor(
     tmp_path: Path,
@@ -779,27 +938,16 @@ def test_export_final_window_race_fails_without_touching_competitor(
         return [pdf, report]
 
     raced_destination = output if competing_destination == "pdf" else manifest
-    real_link = os.link
+    real_reserve = cli._reserve_destination
 
-    def link_with_race(
-        source_path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
-        destination_path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
-        *,
-        src_dir_fd: int | None = None,
-        dst_dir_fd: int | None = None,
-        follow_symlinks: bool = True,
-    ) -> None:
-        if Path(destination_path) == raced_destination:
+    def reserve_with_race(
+        destination: Path, expected_sha256: str
+    ) -> cli._PublishedArtifact:
+        if destination == raced_destination:
             raced_destination.write_bytes(competitor)
-        real_link(
-            source_path,
-            destination_path,
-            src_dir_fd=src_dir_fd,
-            dst_dir_fd=dst_dir_fd,
-            follow_symlinks=follow_symlinks,
-        )
+        return real_reserve(destination, expected_sha256)
 
-    monkeypatch.setattr(os, "link", link_with_race)
+    monkeypatch.setattr(cli, "_reserve_destination", reserve_with_race)
 
     result = cli.main(
         [
@@ -834,18 +982,18 @@ def test_export_rollback_removes_only_the_exact_published_inode(
         report.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
         return [pdf, report]
 
-    real_publish = cli._publish_exclusive
+    real_reserve = cli._reserve_destination
 
-    def publish_with_replacement(
-        staged: Path, destination: Path
+    def reserve_with_replacement(
+        destination: Path, expected_sha256: str
     ) -> cli._PublishedArtifact:
         if destination == manifest:
             output.unlink()
             output.write_bytes(competitor)
             manifest.write_bytes(b"other competitor")
-        return real_publish(staged, destination)
+        return real_reserve(destination, expected_sha256)
 
-    monkeypatch.setattr(cli, "_publish_exclusive", publish_with_replacement)
+    monkeypatch.setattr(cli, "_reserve_destination", reserve_with_replacement)
 
     result = cli.main(
         [
@@ -864,7 +1012,7 @@ def test_export_rollback_removes_only_the_exact_published_inode(
     assert manifest.read_bytes() == b"other competitor"
 
 
-def test_export_falls_back_to_exclusive_copy_when_hard_links_are_unavailable(
+def test_export_copies_to_restrictive_exclusive_destinations(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -877,11 +1025,6 @@ def test_export_falls_back_to_exclusive_copy_when_hard_links_are_unavailable(
         pdf.write_bytes(PDF_FIXTURE.read_bytes())
         report.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
         return [pdf, report]
-
-    def unavailable_link(*_args: object, **_kwargs: object) -> None:
-        raise OSError(errno.EXDEV, "cross-device link")
-
-    monkeypatch.setattr(os, "link", unavailable_link)
 
     result = cli.main(
         [
@@ -898,6 +1041,8 @@ def test_export_falls_back_to_exclusive_copy_when_hard_links_are_unavailable(
     assert result == 0
     assert output.read_bytes() == PDF_FIXTURE.read_bytes()
     assert manifest.read_bytes() == RENDER_MANIFEST_FIXTURE.read_bytes()
+    assert output.stat().st_mode & 0o777 == 0o600
+    assert manifest.stat().st_mode & 0o777 == 0o600
 
 
 def test_preview_warns_for_noncanonical_manifest(
@@ -1211,18 +1356,22 @@ def test_export_validation_race_preserves_competing_destination(
     def provider(
         _source: Path, requested_output: Path, requested_manifest: Path
     ) -> list[Path]:
-        requested_output.write_bytes(b"published pdf")
-        requested_manifest.write_text("{}", encoding="utf-8")
+        requested_output.write_bytes(PDF_FIXTURE.read_bytes())
+        requested_manifest.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
         return [requested_output, requested_manifest]
 
-    real_validate = cli._validate_render_manifest_file
+    real_validate = cli._validate_render_manifest_artifact
 
-    def validate_with_race(path: Path) -> Mapping[str, object]:
+    def validate_with_race(
+        artifact: cli._StagedArtifact,
+    ) -> Mapping[str, object]:
         destination = output if competing_destination == "pdf" else manifest
         destination.write_bytes(competitor)
-        return real_validate(path)
+        return real_validate(artifact)
 
-    monkeypatch.setattr(cli, "_validate_render_manifest_file", validate_with_race)
+    monkeypatch.setattr(
+        cli, "_validate_render_manifest_artifact", validate_with_race
+    )
 
     result = cli.main(
         [

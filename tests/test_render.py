@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -537,6 +539,94 @@ def test_export_document_records_supplied_runtime_image_digest(
     }
 
 
+def test_export_document_publishes_opened_staged_descriptors_after_path_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "input.docx"
+    source.write_bytes(b"docx")
+    output = tmp_path / "output.pdf"
+    manifest_path = tmp_path / "manifest.json"
+    monkeypatch.setattr(render, "_run_soffice", _fake_soffice_conversion)
+    monkeypatch.setattr(
+        render,
+        "_detect_soffice_version",
+        lambda _environment: "LibreOffice 24.2.7.2 actual-build",
+    )
+    real_open_staged = render._open_staged_artifact
+
+    def open_with_replacement(path: Path) -> render._StagedArtifact:
+        artifact = real_open_staged(path)
+        path.unlink()
+        path.write_bytes(
+            b"replacement PDF pathname"
+            if path.suffix == ".pdf"
+            else b'{"replacement": true}'
+        )
+        return artifact
+
+    monkeypatch.setattr(render, "_open_staged_artifact", open_with_replacement)
+
+    export_document(source, output, manifest_path, _environment())
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert output.read_bytes().startswith(b"%PDF-")
+    assert manifest["raw_pdf_sha256"] == _sha256(output)
+
+
+def test_export_document_reserves_both_destinations_before_copying(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "input.docx"
+    source.write_bytes(b"docx")
+    output = tmp_path / "output.pdf"
+    manifest_path = tmp_path / "manifest.json"
+    competitor = b"competitor manifest"
+    copy_calls = 0
+    monkeypatch.setattr(render, "_run_soffice", _fake_soffice_conversion)
+    monkeypatch.setattr(
+        render,
+        "_detect_soffice_version",
+        lambda _environment: "LibreOffice 24.2.7.2 actual-build",
+    )
+    real_open = os.open
+    real_copyfileobj = shutil.copyfileobj
+
+    def open_with_manifest_collision(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if Path(path) == output and flags & os.O_EXCL and not manifest_path.exists():
+            manifest_path.write_bytes(competitor)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    def counted_copyfileobj(*args: object, **kwargs: object) -> None:
+        nonlocal copy_calls
+        copy_calls += 1
+        real_copyfileobj(*args, **kwargs)
+
+    monkeypatch.setattr(
+        os,
+        "link",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno.EXDEV, "cross-device link")
+        ),
+    )
+    monkeypatch.setattr(os, "open", open_with_manifest_collision)
+    monkeypatch.setattr(shutil, "copyfileobj", counted_copyfileobj)
+
+    with pytest.raises(RenderError, match="already exists"):
+        export_document(source, output, manifest_path, _environment())
+
+    assert copy_calls == 0
+    assert not output.exists()
+    assert manifest_path.read_bytes() == competitor
+
+
 @pytest.mark.parametrize("competing_destination", ("pdf", "manifest"))
 def test_export_document_never_clobbers_racing_destination(
     tmp_path: Path,
@@ -593,16 +683,16 @@ def test_second_publication_failure_does_not_remove_replacement_first_artifact(
         "_detect_soffice_version",
         lambda _environment: "LibreOffice 24.2.7.2 actual-build",
     )
-    real_publish = render._publish_exclusive
+    real_reserve = render._reserve_destination
 
-    def publish_with_replacement(staged: Path, destination: Path):
+    def reserve_with_replacement(destination: Path, expected_sha256: str):
         if destination == manifest_path:
             output.unlink()
             output.write_bytes(replacement)
             manifest_path.write_bytes(blocker)
-        return real_publish(staged, destination)
+        return real_reserve(destination, expected_sha256)
 
-    monkeypatch.setattr(render, "_publish_exclusive", publish_with_replacement)
+    monkeypatch.setattr(render, "_reserve_destination", reserve_with_replacement)
 
     with pytest.raises(RenderError, match="already exists"):
         export_document(source, output, manifest_path, _environment())

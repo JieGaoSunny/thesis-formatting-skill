@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import errno
 import json
 import os
 import re
@@ -12,6 +11,7 @@ import stat
 import subprocess
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -477,72 +477,139 @@ def _unlink_exact_artifact(
         return
 
 
-def _publish_exclusive(
-    staged: Path, destination: Path
-) -> tuple[tuple[int, int], str]:
-    expected_sha256 = _sha256_file(staged)
-    staged_identity = _file_identity(staged)
-    created_identity: tuple[int, int] | None = None
+def _sha256_descriptor(descriptor: int) -> str:
+    digest = hashlib.sha256()
+    os.lseek(descriptor, 0, os.SEEK_SET)
     try:
-        try:
-            os.link(staged, destination, follow_symlinks=False)
-            linked_identity = _file_identity(destination)
-            if linked_identity != staged_identity:
-                raise RenderError(
-                    f"published artifact inode mismatch: {destination}"
-                )
-            created_identity = linked_identity
-        except FileExistsError as error:
-            raise RenderError(f"artifact destination already exists: {destination}") from error
-        except OSError as error:
-            if error.errno not in {
-                errno.EXDEV,
-                errno.EPERM,
-                errno.EACCES,
-                errno.ENOTSUP,
-                errno.EOPNOTSUPP,
-            }:
-                raise RenderError(
-                    f"could not publish artifact: {destination}"
-                ) from error
-            try:
-                descriptor = os.open(
-                    destination,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                    staged.stat().st_mode & 0o777,
-                )
-            except FileExistsError as exclusive_error:
-                raise RenderError(
-                    f"artifact destination already exists: {destination}"
-                ) from exclusive_error
-            descriptor_details = os.fstat(descriptor)
-            created_identity = (
-                descriptor_details.st_dev,
-                descriptor_details.st_ino,
-            )
-            try:
-                with staged.open("rb") as source, os.fdopen(descriptor, "wb") as target:
-                    shutil.copyfileobj(source, target)
-                    target.flush()
-                    os.fsync(target.fileno())
-            except BaseException:
-                if created_identity is not None:
-                    _unlink_exact_artifact(destination, created_identity)
-                raise
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+    finally:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+    return digest.hexdigest()
 
-        if _file_identity(destination) != created_identity:
+
+@dataclass
+class _StagedArtifact:
+    path: Path
+    descriptor: int
+    identity: tuple[int, int]
+    sha256: str
+
+    def close(self) -> None:
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+
+
+@dataclass
+class _PublishedArtifact:
+    path: Path
+    descriptor: int
+    identity: tuple[int, int]
+    expected_sha256: str
+
+    def close(self) -> None:
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+
+    def verify(self) -> None:
+        if _sha256_descriptor(self.descriptor) != self.expected_sha256:
+            raise RenderError(f"published artifact hash mismatch: {self.path}")
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(self.path, flags)
+        except OSError as error:
             raise RenderError(
-                f"published artifact inode mismatch: {destination}"
-            )
-        if _sha256_file(destination) != expected_sha256:
+                f"published artifact inode mismatch: {self.path}"
+            ) from error
+        try:
+            details = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(details.st_mode)
+                or (details.st_dev, details.st_ino) != self.identity
+                or _sha256_descriptor(descriptor) != self.expected_sha256
+            ):
+                raise RenderError(
+                    f"published artifact inode mismatch: {self.path}"
+                )
+        finally:
+            os.close(descriptor)
+
+    def rollback(self) -> None:
+        _unlink_exact_artifact(self.path, self.identity)
+
+
+def _open_staged_artifact(path: Path) -> _StagedArtifact:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise RenderError(f"staged artifact cannot be opened: {path}") from error
+    try:
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode) or details.st_size <= 0:
             raise RenderError(
-                f"published artifact hash mismatch: {destination}"
+                f"staged artifact is not a nonempty regular file: {path}"
             )
-        return created_identity, expected_sha256
+        sha256 = _sha256_descriptor(descriptor)
     except BaseException:
-        if created_identity is not None:
-            _unlink_exact_artifact(destination, created_identity, expected_sha256)
+        os.close(descriptor)
         raise
+    return _StagedArtifact(
+        path=path,
+        descriptor=descriptor,
+        identity=(details.st_dev, details.st_ino),
+        sha256=sha256,
+    )
+
+
+def _descriptor_path(descriptor: int) -> Path:
+    return Path(f"/dev/fd/{descriptor}")
+
+
+def _reserve_destination(
+    destination: Path, expected_sha256: str
+) -> _PublishedArtifact:
+    try:
+        descriptor = os.open(
+            destination,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+    except FileExistsError as error:
+        raise RenderError(
+            f"artifact destination already exists: {destination}"
+        ) from error
+    except OSError as error:
+        raise RenderError(f"could not publish artifact: {destination}") from error
+    details = os.fstat(descriptor)
+    return _PublishedArtifact(
+        path=destination,
+        descriptor=descriptor,
+        identity=(details.st_dev, details.st_ino),
+        expected_sha256=expected_sha256,
+    )
+
+
+def _copy_staged_artifact(
+    staged: _StagedArtifact, published: _PublishedArtifact
+) -> None:
+    os.lseek(staged.descriptor, 0, os.SEEK_SET)
+    os.lseek(published.descriptor, 0, os.SEEK_SET)
+    with (
+        os.fdopen(os.dup(staged.descriptor), "rb") as source,
+        os.fdopen(os.dup(published.descriptor), "wb") as target,
+    ):
+        shutil.copyfileobj(source, target)
+        target.flush()
+        os.fsync(target.fileno())
+    os.lseek(staged.descriptor, 0, os.SEEK_SET)
+    os.lseek(published.descriptor, 0, os.SEEK_SET)
 
 
 def export_document(
@@ -581,6 +648,8 @@ def export_document(
     temporary_manifest = (
         manifest_output.parent / f".render-manifest-{token}.json"
     )
+    staged_artifacts: list[_StagedArtifact] = []
+    published_artifacts: list[_PublishedArtifact] = []
     try:
         source_dir = work / "source"
         refreshed_dir = work / "refreshed"
@@ -647,29 +716,47 @@ def export_document(
         if not generated.is_file() or generated.stat().st_size == 0:
             raise RenderError("LibreOffice produced no PDF")
         os.replace(generated, temporary_pdf)
-        manifest = inspect_pdf(temporary_pdf, selected_environment)
+        staged_pdf = _open_staged_artifact(temporary_pdf)
+        staged_artifacts.append(staged_pdf)
+        manifest = inspect_pdf(
+            _descriptor_path(staged_pdf.descriptor), selected_environment
+        )
         validate_render_manifest(manifest)
-        if manifest["raw_pdf_sha256"] != _sha256_file(temporary_pdf):
+        if manifest["raw_pdf_sha256"] != staged_pdf.sha256:
             raise RenderError(
                 "render manifest raw_pdf_sha256 does not match temporary PDF"
             )
         temporary_manifest.write_text(
             canonical_json(manifest), encoding="utf-8"
         )
-        persisted_manifest = _read_manifest(temporary_manifest)
-        if persisted_manifest["raw_pdf_sha256"] != _sha256_file(temporary_pdf):
+        staged_manifest = _open_staged_artifact(temporary_manifest)
+        staged_artifacts.append(staged_manifest)
+        persisted_manifest = _read_manifest(
+            _descriptor_path(staged_manifest.descriptor)
+        )
+        if persisted_manifest["raw_pdf_sha256"] != staged_pdf.sha256:
             raise RenderError(
                 "temporary render manifest raw_pdf_sha256 does not match PDF"
             )
-        published_pdf: tuple[tuple[int, int], str] | None = None
-        try:
-            published_pdf = _publish_exclusive(temporary_pdf, output)
-            _publish_exclusive(temporary_manifest, manifest_output)
-        except BaseException:
-            if published_pdf is not None:
-                _unlink_exact_artifact(output, *published_pdf)
-            raise
+        published_artifacts.append(
+            _reserve_destination(output, staged_pdf.sha256)
+        )
+        published_artifacts.append(
+            _reserve_destination(manifest_output, staged_manifest.sha256)
+        )
+        _copy_staged_artifact(staged_pdf, published_artifacts[0])
+        _copy_staged_artifact(staged_manifest, published_artifacts[1])
+        for artifact in published_artifacts:
+            artifact.verify()
+    except BaseException:
+        for artifact in reversed(published_artifacts):
+            artifact.rollback()
+        raise
     finally:
+        for artifact in published_artifacts:
+            artifact.close()
+        for artifact in staged_artifacts:
+            artifact.close()
         shutil.rmtree(work, ignore_errors=True)
         temporary_pdf.unlink(missing_ok=True)
         temporary_manifest.unlink(missing_ok=True)
