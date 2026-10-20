@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import FrozenInstanceError, is_dataclass
 from pathlib import Path
 
@@ -202,6 +203,23 @@ def test_aliases_are_unique_and_role_detection_is_anchored_and_positioned() -> N
         profile.role_detection.position_constraints["appendix_heading"][0].section
         == "appendix"
     )
+
+
+def test_reference_heading_has_reference_position_constraint() -> None:
+    profile = load_profile(PROFILE_PATH)
+    patterns = profile.role_detection.text_patterns["front_heading"]
+    constraints = profile.role_detection.position_constraints["front_heading"]
+
+    assert any(re.fullmatch(pattern.pattern, "参考文献") for pattern in patterns)
+    assert any(constraint.section == "references" for constraint in constraints)
+    assert all(constraint.section != "body" for constraint in constraints)
+
+
+def test_acknowledgements_is_not_a_front_heading_text_alias() -> None:
+    profile = load_profile(PROFILE_PATH)
+    patterns = profile.role_detection.text_patterns["front_heading"]
+
+    assert not any(re.fullmatch(pattern.pattern, "致谢") for pattern in patterns)
 
 
 @pytest.mark.parametrize(

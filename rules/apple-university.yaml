@@ -379,7 +379,7 @@ role_detection:
     title_zh: []
     title_en: []
     front_heading:
-    - pattern: ^(目录|图目录|表目录|缩略语表|参考文献|致谢)$
+    - pattern: ^(目录|图目录|表目录|缩略语表|参考文献)$
       flags:
       - unicode
       priority: 100
@@ -455,6 +455,10 @@ role_detection:
       first_page_only: true
     front_heading:
     - section: front_matter
+      min_index: 0
+      max_index: null
+      first_page_only: false
+    - section: references
       min_index: 0
       max_index: null
       first_page_only: false
