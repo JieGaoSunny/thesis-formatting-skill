@@ -1,6 +1,6 @@
 {
-  "schema_version": "1.0.0",
-  "snapshot_id": "46901ce724adf6e7",
+  "schema_version": "1.0",
+  "snapshot_id": "9dc1471ab7b6001e",
   "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "body": [
     {"node_id": "body-p-0001", "node_type": "paragraph", "source_location": {"part": "word/document.xml", "path": "/w:document/w:body/w:p[1]", "index": 0}, "normalized_text": "第一章 绪论", "relationship_hash": null},

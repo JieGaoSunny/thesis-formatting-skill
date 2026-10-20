@@ -1,22 +1,37 @@
 {
-  "schema_version": "1.0.0",
-  "privacy_report_id": "edf9855bd4304545",
-  "source_document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "matches": [
+  "schema_version": "1.0",
+  "root_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "denylist_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "scanned_files": [
+    "README.md",
+    "docs/example.md"
+  ],
+  "skipped_files": [
+    ".git/objects/pack/example.pack"
+  ],
+  "findings": [
     {
-      "match_id": "5e69b25bff5dc650",
-      "category": "email",
-      "location": {"node_id": "body-p-0003", "node_type": "paragraph", "source": {"part": "word/document.xml", "path": "/w:document/w:body/w:p[3]", "index": 2, "page": 1}},
-      "match_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "replacement": "[REDACTED:EMAIL]"
+      "finding_id": "f490f185da7d7ff7",
+      "rule_id": "PRIVACY.DENYLIST",
+      "severity": "error",
+      "path": "README.md",
+      "location": "line:4",
+      "redacted_match_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "message": "A private denylist term was found."
     },
     {
-      "match_id": "1289eabeb806f4f0",
-      "category": "student-id",
-      "location": {"node_id": "body-p-0004", "node_type": "paragraph", "source": {"part": "word/document.xml", "path": "/w:document/w:body/w:p[4]", "index": 3, "page": 1}},
-      "match_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "replacement": "[REDACTED:STUDENT-ID]"
+      "finding_id": "04bb6eb67e91b1c1",
+      "rule_id": "PRIVACY.EMAIL",
+      "severity": "warning",
+      "path": "docs/example.md",
+      "location": "line:8",
+      "redacted_match_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "message": "An email-like value was found."
     }
   ],
-  "summary": {"email": 1, "student-id": 1}
+  "summary": {
+    "errors": 1,
+    "violations": 0,
+    "warnings": 1
+  }
 }

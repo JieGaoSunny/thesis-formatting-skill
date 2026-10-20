@@ -4,19 +4,143 @@
   "title": "Thesis transformation result",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "transformation_id", "source_document_sha256", "output_document_sha256", "profile_id", "changes", "post_audit", "content_comparison"],
+  "required": [
+    "schema_version",
+    "source_path",
+    "source_sha256",
+    "output_path",
+    "output_sha256",
+    "changes",
+    "post_audit",
+    "content_comparison"
+  ],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
-    "transformation_id": {"$ref": "#/$defs/stableId"},
-    "source_document_sha256": {"$ref": "#/$defs/sha256"},
-    "output_document_sha256": {"$ref": "#/$defs/sha256"},
-    "profile_id": {"type": "string", "minLength": 1},
-    "changes": {"type": "array", "items": {"$ref": "#/$defs/change"}},
+    "schema_version": {"const": "1.0"},
+    "source_path": {"type": "string", "minLength": 1},
+    "source_sha256": {"$ref": "#/$defs/sha256"},
+    "output_path": {"type": "string", "minLength": 1},
+    "output_sha256": {"$ref": "#/$defs/sha256"},
+    "changes": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/change"}
+    },
     "post_audit": {"$ref": "#/$defs/audit"},
-    "content_comparison": {
+    "content_comparison": {"$ref": "#/$defs/contentComparison"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "stableId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}(?:[0-9a-f]{4}){0,12}$"
+    },
+    "ruleId": {
+      "type": "string",
+      "pattern": "^[A-Z]+(?:\\.[A-Z0-9_]+)+$"
+    },
+    "location": {
+      "type": "string",
+      "pattern": "^(?:document|(?:section|paragraph|table|header|footer):[1-9][0-9]*|cell:[1-9][0-9]*/[1-9][0-9]*/[1-9][0-9]*|part:.+)$"
+    },
+    "jsonValue": {
+      "type": ["array", "boolean", "null", "number", "object", "string"]
+    },
+    "summary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["before_snapshot_sha256", "after_snapshot_sha256", "equivalent", "differences"],
+      "required": ["errors", "violations", "warnings"],
+      "properties": {
+        "errors": {"type": "integer", "minimum": 0},
+        "violations": {"type": "integer", "minimum": 0},
+        "warnings": {"type": "integer", "minimum": 0}
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "finding_id",
+        "rule_id",
+        "severity",
+        "location",
+        "message",
+        "repairable",
+        "repaired",
+        "before",
+        "after"
+      ],
+      "properties": {
+        "finding_id": {"$ref": "#/$defs/stableId"},
+        "rule_id": {"$ref": "#/$defs/ruleId"},
+        "severity": {"enum": ["error", "violation", "warning"]},
+        "location": {"$ref": "#/$defs/location"},
+        "message": {"type": "string", "minLength": 1},
+        "repairable": {"type": "boolean"},
+        "repaired": {"type": "boolean"},
+        "before": {"$ref": "#/$defs/jsonValue"},
+        "after": {"$ref": "#/$defs/jsonValue"}
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "tool_version",
+        "created_at",
+        "document_sha256",
+        "input",
+        "profile",
+        "summary",
+        "findings"
+      ],
+      "properties": {
+        "schema_version": {"const": "1.0"},
+        "tool_version": {"type": "string", "minLength": 1},
+        "created_at": {"type": "string", "format": "date-time"},
+        "document_sha256": {"$ref": "#/$defs/sha256"},
+        "input": {"type": "string", "minLength": 1},
+        "profile": {"type": "string", "minLength": 1},
+        "summary": {"$ref": "#/$defs/summary"},
+        "findings": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/finding"}
+        }
+      }
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "change_id",
+        "rule_id",
+        "location",
+        "operation",
+        "before",
+        "after",
+        "status"
+      ],
+      "properties": {
+        "change_id": {"$ref": "#/$defs/stableId"},
+        "rule_id": {"$ref": "#/$defs/ruleId"},
+        "location": {"$ref": "#/$defs/location"},
+        "operation": {"type": "string", "minLength": 1},
+        "before": {"$ref": "#/$defs/jsonValue"},
+        "after": {"$ref": "#/$defs/jsonValue"},
+        "status": {"enum": ["applied", "skipped", "failed"]}
+      }
+    },
+    "contentComparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before_snapshot_sha256",
+        "after_snapshot_sha256",
+        "equivalent",
+        "differences"
+      ],
       "properties": {
         "before_snapshot_sha256": {"$ref": "#/$defs/sha256"},
         "after_snapshot_sha256": {"$ref": "#/$defs/sha256"},
@@ -32,91 +156,6 @@
               "before": {"$ref": "#/$defs/jsonValue"},
               "after": {"$ref": "#/$defs/jsonValue"}
             }
-          }
-        }
-      }
-    }
-  },
-  "$defs": {
-    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "stableId": {"type": "string", "pattern": "^[0-9a-f]{16}(?:[0-9a-f]{4}){0,12}$"},
-    "jsonValue": {"type": ["array", "boolean", "null", "number", "object", "string"]},
-    "source": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["part", "path", "index", "page"],
-      "properties": {
-        "part": {"type": "string", "minLength": 1},
-        "path": {"type": "string", "minLength": 1},
-        "index": {"type": "integer", "minimum": 0},
-        "page": {"type": ["integer", "null"], "minimum": 1}
-      }
-    },
-    "location": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["node_id", "node_type", "source"],
-      "properties": {
-        "node_id": {"type": "string", "minLength": 1},
-        "node_type": {"type": "string", "minLength": 1},
-        "source": {"$ref": "#/$defs/source"}
-      }
-    },
-    "dataField": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "value"],
-      "properties": {
-        "name": {"type": "string", "minLength": 1},
-        "value": {"$ref": "#/$defs/jsonValue"}
-      }
-    },
-    "change": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["change_id", "operation", "location", "before", "after", "data"],
-      "properties": {
-        "change_id": {"$ref": "#/$defs/stableId"},
-        "operation": {"type": "string", "minLength": 1},
-        "location": {"$ref": "#/$defs/location"},
-        "before": {"$ref": "#/$defs/jsonValue"},
-        "after": {"$ref": "#/$defs/jsonValue"},
-        "data": {"type": "array", "items": {"$ref": "#/$defs/dataField"}}
-      }
-    },
-    "finding": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["finding_id", "rule_id", "severity", "location", "message", "before", "after", "data"],
-      "properties": {
-        "finding_id": {"$ref": "#/$defs/stableId"},
-        "rule_id": {"type": "string", "minLength": 1},
-        "severity": {"enum": ["error", "warning", "info"]},
-        "location": {"$ref": "#/$defs/location"},
-        "message": {"type": "string", "minLength": 1},
-        "before": {"$ref": "#/$defs/jsonValue"},
-        "after": {"$ref": "#/$defs/jsonValue"},
-        "data": {"type": "array", "items": {"$ref": "#/$defs/dataField"}}
-      }
-    },
-    "audit": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["schema_version", "audit_id", "document_sha256", "profile_id", "findings", "summary"],
-      "properties": {
-        "schema_version": {"const": "1.0.0"},
-        "audit_id": {"$ref": "#/$defs/stableId"},
-        "document_sha256": {"$ref": "#/$defs/sha256"},
-        "profile_id": {"type": "string", "minLength": 1},
-        "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
-        "summary": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["error", "warning", "info"],
-          "properties": {
-            "error": {"type": "integer", "minimum": 0},
-            "warning": {"type": "integer", "minimum": 0},
-            "info": {"type": "integer", "minimum": 0}
           }
         }
       }

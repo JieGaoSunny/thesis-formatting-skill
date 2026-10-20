@@ -4,71 +4,83 @@
   "title": "Thesis audit report",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "audit_id", "document_sha256", "profile_id", "findings", "summary"],
+  "required": [
+    "schema_version",
+    "tool_version",
+    "created_at",
+    "document_sha256",
+    "input",
+    "profile",
+    "summary",
+    "findings"
+  ],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
-    "audit_id": {"$ref": "#/$defs/stableId"},
+    "schema_version": {"const": "1.0"},
+    "tool_version": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"},
     "document_sha256": {"$ref": "#/$defs/sha256"},
-    "profile_id": {"type": "string", "minLength": 1},
-    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
-    "summary": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["error", "warning", "info"],
-      "properties": {
-        "error": {"type": "integer", "minimum": 0},
-        "warning": {"type": "integer", "minimum": 0},
-        "info": {"type": "integer", "minimum": 0}
-      }
+    "input": {"type": "string", "minLength": 1},
+    "profile": {"type": "string", "minLength": 1},
+    "summary": {"$ref": "#/$defs/summary"},
+    "findings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/finding"}
     }
   },
   "$defs": {
-    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "stableId": {"type": "string", "pattern": "^[0-9a-f]{16}(?:[0-9a-f]{4}){0,12}$"},
-    "jsonValue": {"type": ["array", "boolean", "null", "number", "object", "string"]},
-    "source": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["part", "path", "index", "page"],
-      "properties": {
-        "part": {"type": "string", "minLength": 1},
-        "path": {"type": "string", "minLength": 1},
-        "index": {"type": "integer", "minimum": 0},
-        "page": {"type": ["integer", "null"], "minimum": 1}
-      }
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "stableId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}(?:[0-9a-f]{4}){0,12}$"
+    },
+    "ruleId": {
+      "type": "string",
+      "pattern": "^[A-Z]+(?:\\.[A-Z0-9_]+)+$"
     },
     "location": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["node_id", "node_type", "source"],
-      "properties": {
-        "node_id": {"type": "string", "minLength": 1},
-        "node_type": {"type": "string", "minLength": 1},
-        "source": {"$ref": "#/$defs/source"}
-      }
+      "type": "string",
+      "pattern": "^(?:document|(?:section|paragraph|table|header|footer):[1-9][0-9]*|cell:[1-9][0-9]*/[1-9][0-9]*/[1-9][0-9]*|part:.+)$"
     },
-    "dataField": {
+    "jsonValue": {
+      "type": ["array", "boolean", "null", "number", "object", "string"]
+    },
+    "summary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "value"],
+      "required": ["errors", "violations", "warnings"],
       "properties": {
-        "name": {"type": "string", "minLength": 1},
-        "value": {"$ref": "#/$defs/jsonValue"}
+        "errors": {"type": "integer", "minimum": 0},
+        "violations": {"type": "integer", "minimum": 0},
+        "warnings": {"type": "integer", "minimum": 0}
       }
     },
     "finding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["finding_id", "rule_id", "severity", "location", "message", "before", "after", "data"],
+      "required": [
+        "finding_id",
+        "rule_id",
+        "severity",
+        "location",
+        "message",
+        "repairable",
+        "repaired",
+        "before",
+        "after"
+      ],
       "properties": {
         "finding_id": {"$ref": "#/$defs/stableId"},
-        "rule_id": {"type": "string", "minLength": 1},
-        "severity": {"enum": ["error", "warning", "info"]},
+        "rule_id": {"$ref": "#/$defs/ruleId"},
+        "severity": {"enum": ["error", "violation", "warning"]},
         "location": {"$ref": "#/$defs/location"},
         "message": {"type": "string", "minLength": 1},
+        "repairable": {"type": "boolean"},
+        "repaired": {"type": "boolean"},
         "before": {"$ref": "#/$defs/jsonValue"},
-        "after": {"$ref": "#/$defs/jsonValue"},
-        "data": {"type": "array", "items": {"$ref": "#/$defs/dataField"}}
+        "after": {"$ref": "#/$defs/jsonValue"}
       }
     }
   }

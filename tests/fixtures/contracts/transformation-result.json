@@ -1,34 +1,42 @@
 {
-  "schema_version": "1.0.0",
-  "transformation_id": "c55ab321d52aa21b",
-  "source_document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "output_document_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-  "profile_id": "apple-university-thesis",
+  "schema_version": "1.0",
+  "source_path": "examples/before.docx",
+  "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "output_path": "examples/after.docx",
+  "output_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "changes": [
     {
-      "change_id": "f7e21df2102c0d36",
-      "operation": "set-paragraph-alignment",
-      "location": {"node_id": "body-p-0001", "node_type": "paragraph", "source": {"part": "word/document.xml", "path": "/w:document/w:body/w:p[1]", "index": 0, "page": 1}},
-      "before": "left",
-      "after": "justified",
-      "data": [{"name": "profile_rule", "value": "paragraph.alignment"}]
+      "change_id": "90a02fa4e408ca92",
+      "rule_id": "PAGE.MARGIN.BODY",
+      "location": "section:1",
+      "operation": "set-section-margins",
+      "before": "20/20/25/25 mm",
+      "after": "25.4/25.4/31.8/25.4 mm",
+      "status": "applied"
     },
     {
-      "change_id": "49538ff3edeef75d",
-      "operation": "set-font-size",
-      "location": {"node_id": "body-p-0002", "node_type": "paragraph", "source": {"part": "word/document.xml", "path": "/w:document/w:body/w:p[2]", "index": 1, "page": 1}},
-      "before": 10.5,
-      "after": 12,
-      "data": [{"name": "profile_rule", "value": "typography.body.size"}]
+      "change_id": "4d65cd132e8066ce",
+      "rule_id": "STYLE.BODY.ALIGNMENT",
+      "location": "paragraph:2",
+      "operation": "preserve-ambiguous-alignment",
+      "before": "left",
+      "after": null,
+      "status": "skipped"
     }
   ],
   "post_audit": {
-    "schema_version": "1.0.0",
-    "audit_id": "f2ca67fda5ae0238",
+    "schema_version": "1.0",
+    "tool_version": "0.1.0",
+    "created_at": "2026-10-20T10:01:00Z",
     "document_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "profile_id": "apple-university-thesis",
-    "findings": [],
-    "summary": {"error": 0, "warning": 0, "info": 0}
+    "input": "examples/after.docx",
+    "profile": "apple-university-thesis",
+    "summary": {
+      "errors": 0,
+      "violations": 0,
+      "warnings": 0
+    },
+    "findings": []
   },
   "content_comparison": {
     "before_snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",

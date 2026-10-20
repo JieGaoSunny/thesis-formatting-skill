@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "render_id", "raw_pdf_sha256", "structural_hash", "renderer", "font_manifest_hash", "locale", "page_dimensions", "named_destinations", "extracted_text_hash", "font_manifest", "pages"],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "1.0"},
     "render_id": {"$ref": "#/$defs/stableId"},
     "raw_pdf_sha256": {"$ref": "#/$defs/sha256"},
     "structural_hash": {"$ref": "#/$defs/sha256"},

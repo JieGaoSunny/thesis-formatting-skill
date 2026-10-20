@@ -1,55 +1,81 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://thesis-format.example/schemas/v1/privacy-report.schema.json",
-  "title": "Privacy redaction report",
+  "title": "Privacy release-check report",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "privacy_report_id", "source_document_sha256", "matches", "summary"],
+  "required": [
+    "schema_version",
+    "root_sha256",
+    "denylist_sha256",
+    "scanned_files",
+    "skipped_files",
+    "findings",
+    "summary"
+  ],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
-    "privacy_report_id": {"$ref": "#/$defs/stableId"},
-    "source_document_sha256": {"$ref": "#/$defs/sha256"},
-    "matches": {"type": "array", "items": {"$ref": "#/$defs/match"}},
-    "summary": {
-      "type": "object",
-      "additionalProperties": {"type": "integer", "minimum": 0},
-      "propertyNames": {"pattern": "^[a-z][a-z0-9-]*$"}
-    }
+    "schema_version": {"const": "1.0"},
+    "root_sha256": {"$ref": "#/$defs/sha256"},
+    "denylist_sha256": {"$ref": "#/$defs/sha256"},
+    "scanned_files": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "skipped_files": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "findings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/finding"}
+    },
+    "summary": {"$ref": "#/$defs/summary"}
   },
   "$defs": {
-    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "stableId": {"type": "string", "pattern": "^[0-9a-f]{16}(?:[0-9a-f]{4}){0,12}$"},
-    "source": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "stableId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}(?:[0-9a-f]{4}){0,12}$"
+    },
+    "ruleId": {
+      "type": "string",
+      "pattern": "^[A-Z]+(?:\\.[A-Z0-9_]+)+$"
+    },
+    "summary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["part", "path", "index", "page"],
+      "required": ["errors", "violations", "warnings"],
       "properties": {
-        "part": {"type": "string", "minLength": 1},
+        "errors": {"type": "integer", "minimum": 0},
+        "violations": {"type": "integer", "minimum": 0},
+        "warnings": {"type": "integer", "minimum": 0}
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "finding_id",
+        "rule_id",
+        "severity",
+        "path",
+        "location",
+        "redacted_match_sha256",
+        "message"
+      ],
+      "properties": {
+        "finding_id": {"$ref": "#/$defs/stableId"},
+        "rule_id": {"$ref": "#/$defs/ruleId"},
+        "severity": {"enum": ["error", "violation", "warning"]},
         "path": {"type": "string", "minLength": 1},
-        "index": {"type": "integer", "minimum": 0},
-        "page": {"type": ["integer", "null"], "minimum": 1}
-      }
-    },
-    "location": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["node_id", "node_type", "source"],
-      "properties": {
-        "node_id": {"type": "string", "minLength": 1},
-        "node_type": {"type": "string", "minLength": 1},
-        "source": {"$ref": "#/$defs/source"}
-      }
-    },
-    "match": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["match_id", "category", "location", "match_hash", "replacement"],
-      "properties": {
-        "match_id": {"$ref": "#/$defs/stableId"},
-        "category": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
-        "location": {"$ref": "#/$defs/location"},
-        "match_hash": {"$ref": "#/$defs/sha256"},
-        "replacement": {"type": "string", "minLength": 1}
+        "location": {"type": "string", "minLength": 1},
+        "redacted_match_sha256": {"$ref": "#/$defs/sha256"},
+        "message": {"type": "string", "minLength": 1}
       }
     }
   }

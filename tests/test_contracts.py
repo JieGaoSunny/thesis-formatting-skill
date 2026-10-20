@@ -6,6 +6,7 @@ import json
 import math
 import re
 import struct
+import unicodedata
 from importlib import resources
 from pathlib import Path
 
@@ -60,6 +61,31 @@ def refresh_id(report: dict, id_field: str) -> None:
     )
 
 
+def report_item_id(item: dict, schema_version: str = "1.0") -> str:
+    payload = "|".join(
+        (
+            schema_version,
+            item["rule_id"],
+            unicodedata.normalize("NFC", item["location"]),
+            canonical_json(item["before"]).rstrip("\n"),
+        )
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def privacy_finding_id(item: dict, schema_version: str = "1.0") -> str:
+    payload = "|".join(
+        (
+            schema_version,
+            item["rule_id"],
+            unicodedata.normalize("NFC", item["path"]),
+            unicodedata.normalize("NFC", item["location"]),
+            item["redacted_match_sha256"],
+        )
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 @pytest.mark.parametrize("contract_name", CONTRACTS)
 def test_valid_contract_fixtures(contract_name: str) -> None:
     validate_contract(contract_name, fixture(contract_name))
@@ -86,6 +112,105 @@ def test_format_profile_fixture_covers_approved_contract() -> None:
     assert set(profile["styles"]) == PROFILE_ROLES
     assert set(profile["role_detection"]["text_patterns"]) == PROFILE_ROLES
     assert set(profile["role_detection"]["position_constraints"]) == PROFILE_ROLES
+
+
+def test_public_report_fixtures_use_schema_version_1_0_and_exact_contract_shapes() -> None:
+    audit = fixture("audit")
+    assert set(audit) == {
+        "schema_version",
+        "tool_version",
+        "created_at",
+        "document_sha256",
+        "input",
+        "profile",
+        "summary",
+        "findings",
+    }
+    assert audit["schema_version"] == "1.0"
+    assert set(audit["summary"]) == {"errors", "violations", "warnings"}
+
+    transformation = fixture("transformation-result")
+    assert set(transformation) == {
+        "schema_version",
+        "source_path",
+        "source_sha256",
+        "output_path",
+        "output_sha256",
+        "changes",
+        "post_audit",
+        "content_comparison",
+    }
+    assert transformation["schema_version"] == "1.0"
+
+    privacy = fixture("privacy-report")
+    assert set(privacy) == {
+        "schema_version",
+        "root_sha256",
+        "denylist_sha256",
+        "scanned_files",
+        "skipped_files",
+        "findings",
+        "summary",
+    }
+    assert privacy["schema_version"] == "1.0"
+    assert set(privacy["summary"]) == {"errors", "violations", "warnings"}
+
+
+def test_audit_finding_contract_is_exact() -> None:
+    finding = fixture("audit")["findings"][0]
+
+    assert set(finding) == {
+        "finding_id",
+        "rule_id",
+        "severity",
+        "location",
+        "message",
+        "repairable",
+        "repaired",
+        "before",
+        "after",
+    }
+    assert finding["finding_id"] == report_item_id(finding)
+
+
+def test_audit_requires_rfc3339_created_at() -> None:
+    audit = fixture("audit")
+    audit["created_at"] = "October 20, 2026"
+
+    with pytest.raises(ContractError, match=r"created_at"):
+        validate_contract("audit", audit)
+
+
+def test_transformation_change_contract_is_exact() -> None:
+    change = fixture("transformation-result")["changes"][0]
+
+    assert set(change) == {
+        "change_id",
+        "rule_id",
+        "location",
+        "operation",
+        "before",
+        "after",
+        "status",
+    }
+    assert change["change_id"] == report_item_id(change)
+
+
+def test_privacy_finding_contract_is_exact_and_never_contains_private_text() -> None:
+    finding = fixture("privacy-report")["findings"][0]
+
+    assert set(finding) == {
+        "finding_id",
+        "rule_id",
+        "severity",
+        "path",
+        "location",
+        "redacted_match_sha256",
+        "message",
+    }
+    assert finding["finding_id"] == privacy_finding_id(finding)
+    assert "matched_text" not in finding
+    assert "replacement" not in finding
 
 
 def test_contract_error_includes_json_path() -> None:
@@ -132,14 +257,9 @@ PROFILE_NUMERIC_PATHS = tuple(numeric_paths(fixture("format-profile")))
 
 @pytest.mark.parametrize("contract_name", CONTRACTS)
 def test_unknown_keys_are_rejected_at_every_object_path(contract_name: str) -> None:
-    allowed_maps = {
-        ("privacy-report", ("summary",)),
-    }
     document = fixture(contract_name)
 
     for path in object_paths(document):
-        if (contract_name, path) in allowed_maps:
-            continue
         mutated = copy.deepcopy(document)
         target = value_at_path(mutated, path)
         assert isinstance(target, dict)
@@ -301,6 +421,153 @@ def test_format_profile_rejects_non_positive_or_infeasible_geometry() -> None:
         validate_contract("format-profile", profile)
 
 
+@pytest.mark.parametrize(
+    ("role", "field"),
+    [
+        ("front_heading", "first_line_chars"),
+        ("heading_1", "left_indent_mm"),
+        ("heading_2", "hanging_indent_mm"),
+        ("heading_3", "first_line_chars"),
+        ("appendix_heading", "left_indent_mm"),
+    ],
+)
+def test_format_profile_requires_zero_heading_indentation(
+    role: str, field: str
+) -> None:
+    profile = fixture("format-profile")
+    profile["styles"][role]["paragraph"][field] = 1
+
+    with pytest.raises(ContractError, match=r"heading.*indent"):
+        validate_contract("format-profile", profile)
+
+
+def test_format_profile_limits_figure_width_to_body_content_width() -> None:
+    profile = fixture("format-profile")
+    profile["figures"]["max_width_mm"] = 153
+
+    with pytest.raises(ContractError, match=r"figure.*content width"):
+        validate_contract("format-profile", profile)
+
+
+def test_format_profile_requires_word_style_aliases_unique_across_roles() -> None:
+    profile = fixture("format-profile")
+    profile["styles"]["heading_2"]["word_styles"][0] = (
+        profile["styles"]["heading_1"]["word_styles"][0]
+    )
+
+    with pytest.raises(ContractError, match=r"word_styles.*exactly one"):
+        validate_contract("format-profile", profile)
+
+
+@pytest.mark.parametrize(
+    ("style_field", "reference_field", "value"),
+    [
+        ("space_before_pt", "space_before_pt", 3),
+        ("space_after_pt", "space_after_pt", 3),
+        ("hanging_indent_mm", "hanging_indent_mm", 3),
+    ],
+)
+def test_format_profile_requires_reference_style_values_to_agree(
+    style_field: str, reference_field: str, value: int
+) -> None:
+    profile = fixture("format-profile")
+    profile["styles"]["reference"]["paragraph"][style_field] = value
+
+    with pytest.raises(ContractError, match=reference_field):
+        validate_contract("format-profile", profile)
+
+
+def test_format_profile_requires_reference_line_spacing_to_agree() -> None:
+    profile = fixture("format-profile")
+    profile["styles"]["reference"]["paragraph"]["line_spacing"] = {
+        "type": "exact",
+        "value_pt": 17,
+    }
+
+    with pytest.raises(ContractError, match=r"line_spacing"):
+        validate_contract("format-profile", profile)
+
+
+@pytest.mark.parametrize(
+    ("section", "invalid"),
+    [("figures", "above"), ("tables", "below")],
+)
+def test_format_profile_requires_approved_caption_positions(
+    section: str, invalid: str
+) -> None:
+    profile = fixture("format-profile")
+    profile[section]["caption_position"] = invalid
+
+    with pytest.raises(ContractError, match=r"caption_position"):
+        validate_contract("format-profile", profile)
+
+
+def test_format_profile_requires_header_source_none_when_disabled() -> None:
+    profile = fixture("format-profile")
+    region = profile["headers_footers"]["appendix"]
+    region["header_enabled"] = False
+
+    with pytest.raises(ContractError, match=r"header_source.*none"):
+        validate_contract("format-profile", profile)
+
+
+def test_format_profile_requires_enabled_page_number_alignment_to_match() -> None:
+    profile = fixture("format-profile")
+    profile["headers_footers"]["body"]["page_number_alignment"] = "right"
+
+    with pytest.raises(ContractError, match=r"page_number_alignment"):
+        validate_contract("format-profile", profile)
+
+
+def test_format_profile_requires_front_pagination_style_consistency() -> None:
+    profile = fixture("format-profile")
+    profile["front_matter"]["parts"][2]["page_number_style"] = "decimal"
+
+    with pytest.raises(ContractError, match=r"front.*page-number style"):
+        validate_contract("format-profile", profile)
+
+
+def test_format_profile_rejects_overlapping_front_and_body_decimal_pagination() -> None:
+    profile = fixture("format-profile")
+    for part in profile["front_matter"]["parts"][2:]:
+        part["page_number_style"] = "decimal"
+    profile["headers_footers"]["front_matter"]["page_number_style"] = "decimal"
+
+    with pytest.raises(ContractError, match=r"overlap|reset"):
+        validate_contract("format-profile", profile)
+
+
+def test_format_profile_requires_body_decimal_pagination_and_positive_reset() -> None:
+    profile = fixture("format-profile")
+    profile["headers_footers"]["body"]["page_number_style"] = "upper_roman"
+
+    with pytest.raises(ContractError, match=r"body.*decimal"):
+        validate_contract("format-profile", profile)
+
+
+def test_format_profile_requires_show_header_consistency() -> None:
+    profile = fixture("format-profile")
+    profile["front_matter"]["parts"][0]["show_header"] = True
+
+    with pytest.raises(ContractError, match=r"show_header"):
+        validate_contract("format-profile", profile)
+
+
+@pytest.mark.parametrize("field_name", ["toc", "list_of_figures", "list_of_tables"])
+def test_format_profile_requires_required_fields_to_map_existing_front_styles(
+    field_name: str,
+) -> None:
+    profile = fixture("format-profile")
+    profile["front_matter"]["parts"] = [
+        part
+        for part in profile["front_matter"]["parts"]
+        if part["id"] != field_name
+    ]
+
+    with pytest.raises(ContractError, match=rf"{field_name}.*front-matter style"):
+        validate_contract("format-profile", profile)
+
+
 def test_format_profile_rejects_reversed_toc_levels() -> None:
     profile = fixture("format-profile")
     profile["fields"]["toc"]["levels"] = {"min": 4, "max": 3}
@@ -416,7 +683,7 @@ def test_invalid_stable_id_is_rejected() -> None:
 
 @pytest.mark.parametrize(
     "contract_name,collection",
-    [("audit", "findings"), ("transformation-result", "changes"), ("privacy-report", "matches")],
+    [("audit", "findings"), ("transformation-result", "changes"), ("privacy-report", "findings")],
 )
 def test_semantically_wrong_order_is_rejected(contract_name: str, collection: str) -> None:
     report = fixture(contract_name)
@@ -448,12 +715,73 @@ def test_duplicate_collection_semantic_keys_are_rejected(
         validate_contract(contract_name, report)
 
 
-def test_privacy_contract_cannot_contain_private_matched_text() -> None:
+@pytest.mark.parametrize("obsolete_field", ["matched_text", "replacement", "match_hash"])
+def test_privacy_contract_rejects_obsolete_matched_text_model(
+    obsolete_field: str,
+) -> None:
     report = fixture("privacy-report")
-    report["matches"][0]["matched_text"] = "private"
+    report["findings"][0][obsolete_field] = "private"
 
-    with pytest.raises(ContractError, match=r"matched_text"):
+    with pytest.raises(ContractError, match=obsolete_field):
         validate_contract("privacy-report", report)
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "document",
+        "section:2",
+        "paragraph:3",
+        "table:4",
+        "cell:4/2/1",
+        "header:2",
+        "footer:2",
+        "part:word/comments.xml",
+    ],
+)
+def test_audit_accepts_every_approved_location_syntax(location: str) -> None:
+    audit = fixture("audit")
+    audit["findings"] = audit["findings"][:1]
+    audit["summary"] = {"errors": 0, "violations": 1, "warnings": 0}
+    audit["findings"][0]["location"] = location
+    audit["findings"][0]["finding_id"] = report_item_id(audit["findings"][0])
+
+    validate_contract("audit", audit)
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["section:0", "cell:1/0/2", "part:", "page:1", "paragraph:-1"],
+)
+def test_audit_rejects_unapproved_location_syntax(location: str) -> None:
+    audit = fixture("audit")
+    audit["findings"][0]["location"] = location
+
+    with pytest.raises(ContractError, match=r"location"):
+        validate_contract("audit", audit)
+
+
+@pytest.mark.parametrize(
+    "rule_id",
+    ["page.margin.body", "PAGE", "PAGE..BODY", "PAGE-MARGIN.BODY"],
+)
+def test_reports_reject_rule_ids_outside_uppercase_dotted_contract(
+    rule_id: str,
+) -> None:
+    audit = fixture("audit")
+    audit["findings"][0]["rule_id"] = rule_id
+
+    with pytest.raises(ContractError, match=r"rule_id"):
+        validate_contract("audit", audit)
+
+
+@pytest.mark.parametrize("severity", ["info", "fatal", "ERROR"])
+def test_audit_rejects_unapproved_severity(severity: str) -> None:
+    audit = fixture("audit")
+    audit["findings"][0]["severity"] = severity
+
+    with pytest.raises(ContractError, match=r"severity"):
+        validate_contract("audit", audit)
 
 
 def test_render_destinations_must_reference_existing_pages() -> None:

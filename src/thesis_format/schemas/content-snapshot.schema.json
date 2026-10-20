@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "snapshot_id", "document_sha256", "body", "headers", "footers"],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "1.0"},
     "snapshot_id": {"$ref": "#/$defs/stableId"},
     "document_sha256": {"$ref": "#/$defs/sha256"},
     "body": {"type": "array", "items": {"$ref": "#/$defs/node"}},

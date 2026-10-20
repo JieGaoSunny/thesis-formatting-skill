@@ -9,15 +9,16 @@ import math
 import re
 import unicodedata
 from collections import Counter
+from datetime import datetime
 from functools import lru_cache
 from importlib import resources
 from typing import Any, Iterable, Mapping, Sequence
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.0"
 CONTRACT_NAMES = frozenset(
     {
         "format-profile",
@@ -266,34 +267,45 @@ def _without(value: Mapping[str, Any], key: str) -> dict[str, Any]:
     return {name: item for name, item in value.items() if name != key}
 
 
-def _location_key(item: Mapping[str, Any]) -> tuple[Any, ...]:
-    location = item["location"]
-    source = location["source"]
-    return (
-        source["part"],
-        source["index"],
-        source["path"],
-        -1 if source["page"] is None else source["page"],
-        location["node_id"],
-        canonical_sha256(_without(item, _id_field(item))),
+def _normalized_report_value(value: Any) -> str:
+    return canonical_json(value).rstrip("\n")
+
+
+def _report_item_digest(schema_version: str, item: Mapping[str, Any]) -> str:
+    payload = "|".join(
+        (
+            schema_version,
+            unicodedata.normalize("NFC", item["rule_id"]),
+            unicodedata.normalize("NFC", item["location"]),
+            _normalized_report_value(item["before"]),
+        )
     )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _id_field(item: Mapping[str, Any]) -> str:
-    for candidate in ("finding_id", "change_id", "match_id"):
-        if candidate in item:
-            return candidate
-    raise ValueError("collection item has no stable ID field")
+def _privacy_finding_digest(
+    schema_version: str, item: Mapping[str, Any]
+) -> str:
+    payload = "|".join(
+        (
+            schema_version,
+            unicodedata.normalize("NFC", item["rule_id"]),
+            unicodedata.normalize("NFC", item["path"]),
+            unicodedata.normalize("NFC", item["location"]),
+            item["redacted_match_sha256"],
+        )
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _validate_collection(
+def _validate_payload_ids(
     items: list[dict[str, Any]],
     *,
     path: tuple[str | int, ...],
     id_field: str,
+    digest_function: Any,
 ) -> None:
-    payloads = [_without(item, id_field) for item in items]
-    full_digests = [canonical_sha256(payload) for payload in payloads]
+    full_digests = [digest_function(item) for item in items]
     seen_digests: dict[str, int] = {}
     for index, digest in enumerate(full_digests):
         if digest in seen_digests:
@@ -315,12 +327,29 @@ def _validate_collection(
                 ),
                 path + (index, id_field),
             )
-    expected_order = sorted(items, key=_location_key)
-    if items != expected_order:
-        raise ContractError(
-            "items must be in stable source-location order",
-            path,
-        )
+
+
+_LOCATION_RANK = {
+    "document": 0,
+    "section": 1,
+    "paragraph": 2,
+    "table": 3,
+    "cell": 4,
+    "header": 5,
+    "footer": 6,
+    "part": 7,
+}
+
+
+def _document_location_key(location: str) -> tuple[Any, ...]:
+    if location == "document":
+        return (_LOCATION_RANK["document"],)
+    kind, value = location.split(":", 1)
+    if kind == "cell":
+        return (_LOCATION_RANK[kind], *(int(part) for part in value.split("/")))
+    if kind == "part":
+        return (_LOCATION_RANK[kind], unicodedata.normalize("NFC", value))
+    return (_LOCATION_RANK[kind], int(value))
 
 
 def _validate_top_id(
@@ -335,29 +364,81 @@ def _validate_top_id(
 
 
 def _validate_audit(report: dict[str, Any], path: tuple[str | int, ...] = ()) -> None:
+    try:
+        created_at = datetime.fromisoformat(report["created_at"].replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ContractError(
+            "created_at must be an RFC 3339 date-time",
+            path + ("created_at",),
+            cause=error,
+        ) from error
+    if created_at.tzinfo is None:
+        raise ContractError(
+            "created_at must include an RFC 3339 timezone",
+            path + ("created_at",),
+        )
+
     findings = report["findings"]
-    _validate_collection(
-        findings, path=path + ("findings",), id_field="finding_id"
+    _validate_payload_ids(
+        findings,
+        path=path + ("findings",),
+        id_field="finding_id",
+        digest_function=lambda item: _report_item_digest(
+            report["schema_version"], item
+        ),
     )
     counts = Counter(finding["severity"] for finding in findings)
     expected_summary = {
-        "error": counts["error"],
-        "warning": counts["warning"],
-        "info": counts["info"],
+        "errors": counts["error"],
+        "violations": counts["violation"],
+        "warnings": counts["warning"],
     }
     if report["summary"] != expected_summary:
         raise ContractError(
             f"summary must equal {expected_summary!r}", path + ("summary",)
         )
-    _validate_top_id(report, "audit_id", path)
+    severity_order = {"error": 0, "violation": 1, "warning": 2}
+    expected_order = sorted(
+        findings,
+        key=lambda item: (
+            _document_location_key(item["location"]),
+            severity_order[item["severity"]],
+            item["rule_id"],
+            item["finding_id"],
+        ),
+    )
+    if findings != expected_order:
+        raise ContractError(
+            "findings must be ordered by document location, severity, rule_id, and finding_id",
+            path + ("findings",),
+        )
 
 
 def _validate_transformation(report: dict[str, Any]) -> None:
-    _validate_collection(
-        report["changes"], path=("changes",), id_field="change_id"
+    changes = report["changes"]
+    _validate_payload_ids(
+        changes,
+        path=("changes",),
+        id_field="change_id",
+        digest_function=lambda item: _report_item_digest(
+            report["schema_version"], item
+        ),
     )
+    expected_order = sorted(
+        changes,
+        key=lambda item: (
+            _document_location_key(item["location"]),
+            item["rule_id"],
+            item["change_id"],
+        ),
+    )
+    if changes != expected_order:
+        raise ContractError(
+            "changes must be ordered by location, rule_id, and change_id",
+            ("changes",),
+        )
     _validate_audit(report["post_audit"], ("post_audit",))
-    if report["post_audit"]["document_sha256"] != report["output_document_sha256"]:
+    if report["post_audit"]["document_sha256"] != report["output_sha256"]:
         raise ContractError(
             "post audit document must be the transformation output",
             ("post_audit", "document_sha256"),
@@ -368,7 +449,6 @@ def _validate_transformation(report: dict[str, Any]) -> None:
             "equivalent must be true exactly when differences is empty",
             ("content_comparison", "equivalent"),
         )
-    _validate_top_id(report, "transformation_id")
 
 
 def _validate_snapshot(report: dict[str, Any]) -> None:
@@ -395,14 +475,41 @@ def _validate_snapshot(report: dict[str, Any]) -> None:
 
 
 def _validate_privacy(report: dict[str, Any]) -> None:
-    _validate_collection(report["matches"], path=("matches",), id_field="match_id")
-    counts = dict(sorted(Counter(match["category"] for match in report["matches"]).items()))
-    if report["summary"] != counts:
+    findings = report["findings"]
+    _validate_payload_ids(
+        findings,
+        path=("findings",),
+        id_field="finding_id",
+        digest_function=lambda item: _privacy_finding_digest(
+            report["schema_version"], item
+        ),
+    )
+    expected_order = sorted(
+        findings,
+        key=lambda item: (
+            unicodedata.normalize("NFC", item["path"]),
+            unicodedata.normalize("NFC", item["location"]),
+            item["rule_id"],
+            item["redacted_match_sha256"],
+            item["finding_id"],
+        ),
+    )
+    if findings != expected_order:
         raise ContractError(
-            f"summary must equal {counts!r}",
+            "findings must be ordered by path, location, rule_id, redacted hash, and finding_id",
+            ("findings",),
+        )
+    counts = Counter(finding["severity"] for finding in findings)
+    expected_summary = {
+        "errors": counts["error"],
+        "violations": counts["violation"],
+        "warnings": counts["warning"],
+    }
+    if report["summary"] != expected_summary:
+        raise ContractError(
+            f"summary must equal {expected_summary!r}",
             ("summary",),
         )
-    _validate_top_id(report, "privacy_report_id")
 
 
 def _validate_render(report: dict[str, Any]) -> None:
@@ -526,6 +633,176 @@ def _validate_format_profile(profile: dict[str, Any]) -> None:
             ("page", "body"),
         )
 
+    heading_roles = (
+        "front_heading",
+        "heading_1",
+        "heading_2",
+        "heading_3",
+        "appendix_heading",
+    )
+    for role in heading_roles:
+        paragraph = profile["styles"][role]["paragraph"]
+        for field in ("first_line_chars", "left_indent_mm", "hanging_indent_mm"):
+            if paragraph[field] != 0:
+                raise ContractError(
+                    "heading indentation values must all be zero",
+                    ("styles", role, "paragraph", field),
+                )
+
+    if profile["figures"]["max_width_mm"] - content_width > 1e-9:
+        raise ContractError(
+            "figure maximum width may not exceed body content width",
+            ("figures", "max_width_mm"),
+        )
+
+    aliases: dict[str, str] = {}
+    for role, style in profile["styles"].items():
+        for index, alias in enumerate(style["word_styles"]):
+            previous_role = aliases.get(alias)
+            if previous_role is not None:
+                raise ContractError(
+                    (
+                        "each word_styles alias must map to exactly one semantic "
+                        f"role; {alias!r} also maps to {previous_role!r}"
+                    ),
+                    ("styles", role, "word_styles", index),
+                )
+            aliases[alias] = role
+
+    reference_style = profile["styles"]["reference"]["paragraph"]
+    references = profile["references"]
+    expected_line_spacing = {
+        "type": "exact",
+        "value_pt": references["line_spacing_pt"],
+    }
+    if reference_style["line_spacing"] != expected_line_spacing:
+        raise ContractError(
+            f"reference line_spacing must equal {expected_line_spacing!r}",
+            ("styles", "reference", "paragraph", "line_spacing"),
+        )
+    for field in ("space_before_pt", "space_after_pt", "hanging_indent_mm"):
+        if reference_style[field] != references[field]:
+            raise ContractError(
+                f"reference style {field} must equal references.{field}",
+                ("styles", "reference", "paragraph", field),
+            )
+
+    if profile["figures"]["caption_position"] != "below":
+        raise ContractError(
+            "figures.caption_position must be 'below'",
+            ("figures", "caption_position"),
+        )
+    if profile["tables"]["caption_position"] != "above":
+        raise ContractError(
+            "tables.caption_position must be 'above'",
+            ("tables", "caption_position"),
+        )
+
+    headers_footers = profile["headers_footers"]
+    page_alignment = profile["fields"]["page_number"]["alignment"]
+    for region_name in ("front_matter", "body", "appendix"):
+        region = headers_footers[region_name]
+        if not region["header_enabled"] and region["header_source"] != "none":
+            raise ContractError(
+                "header_source must be none when header_enabled is false",
+                ("headers_footers", region_name, "header_source"),
+            )
+        if region["header_style_role"] not in profile["styles"]:
+            raise ContractError(
+                "header_style_role must name an existing semantic style",
+                ("headers_footers", region_name, "header_style_role"),
+            )
+        if (
+            region["page_number_enabled"]
+            and region["page_number_alignment"] != page_alignment
+        ):
+            raise ContractError(
+                "enabled page_number_alignment must equal fields.page_number.alignment",
+                ("headers_footers", region_name, "page_number_alignment"),
+            )
+
+    parts = profile["front_matter"]["parts"]
+    part_by_id = {part["id"]: part for part in parts}
+    for field_name in ("toc", "list_of_figures", "list_of_tables"):
+        if profile["fields"][field_name]["required"]:
+            part = part_by_id.get(field_name)
+            if part is None or part["heading_role"] not in profile["styles"]:
+                raise ContractError(
+                    f"required field {field_name} must map to an existing front-matter style",
+                    ("fields", field_name, "required"),
+                )
+
+    front_region = headers_footers["front_matter"]
+    numbered_parts = [
+        part for part in parts if part["page_number_style"] != "none"
+    ]
+    if front_region["page_number_enabled"]:
+        if not numbered_parts:
+            raise ContractError(
+                "front page numbering is enabled but no front-matter part is numbered",
+                ("front_matter", "parts"),
+            )
+        for index, part in enumerate(parts):
+            if (
+                part["page_number_style"] != "none"
+                and part["page_number_style"] != front_region["page_number_style"]
+            ):
+                raise ContractError(
+                    "front part page-number style must match headers_footers.front_matter",
+                    ("front_matter", "parts", index, "page_number_style"),
+                )
+    elif numbered_parts:
+        raise ContractError(
+            "front page numbering is disabled but a front-matter part is numbered",
+            ("front_matter", "parts"),
+        )
+
+    first_numbered = numbered_parts[0] if numbered_parts else None
+    if first_numbered is not None and not first_numbered["starts_section"]:
+        raise ContractError(
+            "the first numbered front-matter part must start a section for page reset",
+            ("front_matter", "parts"),
+        )
+
+    for index, part in enumerate(parts):
+        expected_show_header = (
+            front_region["header_enabled"]
+            and part["page_number_style"] != "none"
+        )
+        if part["show_header"] != expected_show_header:
+            raise ContractError(
+                "front_matter show_header must match rendered front header behavior",
+                ("front_matter", "parts", index, "show_header"),
+            )
+
+    body_region = headers_footers["body"]
+    if (
+        not body_region["page_number_enabled"]
+        or body_region["page_number_style"] != "decimal"
+    ):
+        raise ContractError(
+            "body page numbering must be enabled with decimal style",
+            ("headers_footers", "body", "page_number_style"),
+        )
+    if (
+        front_region["page_number_style"] == "decimal"
+        and body_region["page_number_style"] == "decimal"
+    ):
+        raise ContractError(
+            "front and body decimal pagination ranges must not overlap; body reset is required",
+            ("headers_footers", "front_matter", "page_number_style"),
+        )
+    appendix_region = headers_footers["appendix"]
+    if (
+        appendix_region["page_number_enabled"]
+        and appendix_region["page_number_style"]
+        != body_region["page_number_style"]
+    ):
+        raise ContractError(
+            "appendix page-number style must continue the body pagination style",
+            ("headers_footers", "appendix", "page_number_style"),
+        )
+
     toc_levels = profile["fields"]["toc"]["levels"]
     if toc_levels["min"] > toc_levels["max"]:
         raise ContractError(
@@ -621,7 +898,7 @@ def validate_contract(contract_name: str, instance: Any) -> None:
 
     _reject_non_finite_floats(instance)
     schema = load_schema(contract_name)
-    validator = Draft202012Validator(schema)
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
     error = next(iter(validator.iter_errors(instance)), None)
     if error is not None:
         raise ContractError.from_jsonschema(error) from error
