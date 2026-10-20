@@ -1,0 +1,640 @@
+"""Immutable semantic inspection of WordprocessingML documents."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable
+
+from lxml import etree
+
+from thesis_format.ooxml import OoxmlPackage, Relationship
+from thesis_format.profile import FormatProfile, TextPattern
+
+
+W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+NS = {"w": W_NS, "r": R_NS}
+W_VAL = f"{{{W_NS}}}val"
+W_INSTR = f"{{{W_NS}}}instr"
+R_ATTRIBUTES = {
+    f"{{{R_NS}}}id",
+    f"{{{R_NS}}}embed",
+    f"{{{R_NS}}}link",
+}
+AUTOMATIC_ROLES = frozenset(
+    {
+        "front_heading",
+        "heading_1",
+        "heading_2",
+        "heading_3",
+        "figure_caption",
+        "table_caption",
+        "reference",
+        "appendix_heading",
+    }
+)
+HEADING_LEVELS = {"heading_1": 1, "heading_2": 2, "heading_3": 3}
+FIELD_SPACE = re.compile(r"\s+")
+MANUAL_NUMBER = re.compile(
+    r"^(?P<token>(?:第[一二三四五六七八九十百]+章|"
+    r"\d+(?:\.\d+){1,2}|附录\s*[A-Z]|[图表]\s*\d+[.-]\d+))(?=\s|$)"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticParagraph:
+    location: str
+    raw_text: str
+    style_id: str | None
+    style_name: str | None
+    role: str | None
+    role_source: str | None
+    repairable: bool
+    manual_number_token: str | None
+    fields: tuple[str, ...]
+    relationship_identity: tuple[str, ...]
+    bookmarks: tuple[str, ...]
+    warnings: tuple[str, ...]
+    part_name: str = "word/document.xml"
+
+    @property
+    def warning(self) -> str | None:
+        return self.warnings[0] if self.warnings else None
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticTable:
+    location: str
+    raw_text: str
+    row_count: int
+    column_count: int
+    relationship_identity: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticSection:
+    location: str
+    start_paragraph: int
+    header_relationship_ids: tuple[str, ...]
+    footer_relationship_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticStyle:
+    style_id: str
+    name: str | None
+    style_type: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticNumbering:
+    num_id: str
+    abstract_num_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticDocument:
+    path: Path
+    paragraphs: tuple[SemanticParagraph, ...]
+    tables: tuple[SemanticTable, ...]
+    sections: tuple[SemanticSection, ...]
+    styles: tuple[SemanticStyle, ...]
+    numbering: tuple[SemanticNumbering, ...]
+    relationships: tuple[Relationship, ...]
+    bookmarks: tuple[str, ...]
+    headers: tuple[SemanticParagraph, ...]
+    footers: tuple[SemanticParagraph, ...]
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _Evidence:
+    role: str
+    source: str
+
+
+def _text(element: etree._Element) -> str:
+    return "".join(element.xpath(".//w:t/text()", namespaces=NS))
+
+
+def _fields(element: etree._Element) -> tuple[str, ...]:
+    values: list[str] = []
+    for simple in element.xpath(".//w:fldSimple", namespaces=NS):
+        instruction = simple.get(W_INSTR)
+        if instruction:
+            values.append(FIELD_SPACE.sub(" ", instruction).strip())
+    complex_instruction = "".join(
+        element.xpath(".//w:instrText/text()", namespaces=NS)
+    )
+    if complex_instruction.strip():
+        values.append(FIELD_SPACE.sub(" ", complex_instruction).strip())
+    return tuple(values)
+
+
+def _bookmarks(element: etree._Element) -> tuple[str, ...]:
+    return tuple(
+        name
+        for name in element.xpath(".//w:bookmarkStart/@w:name", namespaces=NS)
+        if not name.startswith("_")
+    )
+
+
+def _style_id(element: etree._Element) -> str | None:
+    values = element.xpath("./w:pPr/w:pStyle/@w:val", namespaces=NS)
+    return values[0] if values else None
+
+
+def _style_map(package: OoxmlPackage) -> dict[str, str | None]:
+    if "word/styles.xml" not in package.parts:
+        return {}
+    result: dict[str, str | None] = {}
+    for style in package.xml("word/styles.xml").xpath(".//w:style", namespaces=NS):
+        style_id = style.get(f"{{{W_NS}}}styleId")
+        if not style_id:
+            continue
+        names = style.xpath("./w:name/@w:val", namespaces=NS)
+        result[style_id] = names[0] if names else None
+    return result
+
+
+def _relationship_map(
+    relationships: Iterable[Relationship], source_part: str = "word/document.xml"
+) -> dict[str, Relationship]:
+    return {
+        relationship.id: relationship
+        for relationship in relationships
+        if relationship.source_part == source_part
+    }
+
+
+def _element_relationships(
+    element: etree._Element, by_id: dict[str, Relationship]
+) -> tuple[str, ...]:
+    identities: list[str] = []
+    for descendant in element.iter():
+        for attribute, value in descendant.attrib.items():
+            if attribute in R_ATTRIBUTES and value in by_id:
+                identity = by_id[value].identity
+                if identity not in identities:
+                    identities.append(identity)
+    return tuple(identities)
+
+
+def _compile_pattern(pattern: TextPattern) -> re.Pattern[str]:
+    flags = 0
+    if "ignore_case" in pattern.flags:
+        flags |= re.IGNORECASE
+    if "unicode" in pattern.flags:
+        flags |= re.UNICODE
+    return re.compile(pattern.pattern, flags)
+
+
+def _mapped_style_role(
+    style_id: str | None,
+    style_name: str | None,
+    profile: FormatProfile,
+) -> str | None:
+    if style_id is None and style_name is None:
+        return None
+    for role, style in profile.styles.items():
+        if style_id in style.word_styles or style_name in style.word_styles:
+            return role
+    return None
+
+
+def _bookmark_role(bookmarks: tuple[str, ...]) -> str | None:
+    normalized = {
+        bookmark.removeprefix("thesis-role-")
+        .removeprefix("role_")
+        .removeprefix("role:")
+        for bookmark in bookmarks
+    }
+    matches = normalized & AUTOMATIC_ROLES
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def _field_role(fields: tuple[str, ...]) -> str | None:
+    roles: set[str] = set()
+    for field in fields:
+        upper = field.upper()
+        if re.search(r"\bSEQ\s+(FIGURE|图)\b", upper):
+            roles.add("figure_caption")
+        if re.search(r"\bSEQ\s+(TABLE|表)\b", upper):
+            roles.add("table_caption")
+    return next(iter(roles)) if len(roles) == 1 else None
+
+
+def _numbering_role(element: etree._Element) -> str | None:
+    num_ids = element.xpath("./w:pPr/w:numPr/w:numId/@w:val", namespaces=NS)
+    if not num_ids or num_ids[0] == "0":
+        return None
+    levels = element.xpath("./w:pPr/w:numPr/w:ilvl/@w:val", namespaces=NS)
+    try:
+        level = int(levels[0]) if levels else 0
+    except ValueError:
+        return None
+    return {0: "heading_1", 1: "heading_2", 2: "heading_3"}.get(level)
+
+
+def _explicit_role(
+    element: etree._Element,
+    fields: tuple[str, ...],
+    bookmarks: tuple[str, ...],
+) -> tuple[str | None, bool]:
+    candidates = {
+        role
+        for role in (
+            _field_role(fields),
+            _bookmark_role(bookmarks),
+            _numbering_role(element),
+        )
+        if role is not None
+    }
+    if len(candidates) > 1:
+        return None, True
+    return (next(iter(candidates)), False) if candidates else (None, False)
+
+
+def _pattern_roles(text: str, profile: FormatProfile) -> set[str]:
+    matches: set[str] = set()
+    for role, patterns in profile.role_detection.text_patterns.items():
+        if role not in AUTOMATIC_ROLES:
+            continue
+        if any(_compile_pattern(pattern).fullmatch(text) for pattern in patterns):
+            matches.add(role)
+    return matches
+
+
+def _manual_number(text: str) -> str | None:
+    match = MANUAL_NUMBER.match(text)
+    return match.group("token") if match else None
+
+
+def _region_for(index: int, markers: dict[str, int | None]) -> str:
+    appendix = markers["appendix"]
+    references = markers["references"]
+    body = markers["body"]
+    if appendix is not None and index > appendix:
+        return "appendix"
+    if references is not None and index > references and (
+        appendix is None or index < appendix
+    ):
+        return "references"
+    if body is not None and index >= body:
+        return "body"
+    return "front_matter"
+
+
+def _position_role(
+    *,
+    region: str,
+    text: str,
+    regional_index: int,
+    profile: FormatProfile,
+) -> str | None:
+    candidates: set[str] = set()
+    for role, constraints in profile.role_detection.position_constraints.items():
+        if role not in AUTOMATIC_ROLES:
+            continue
+        for constraint in constraints:
+            if constraint.section not in {region, "any"}:
+                continue
+            if regional_index < constraint.min_index:
+                continue
+            if (
+                constraint.max_index is not None
+                and regional_index > constraint.max_index
+            ):
+                continue
+            if role == "reference" and region == "references" and text.strip():
+                candidates.add(role)
+            # Position alone is intentionally not enough to turn front-matter
+            # prose into a heading. References are safe only after the
+            # reference heading has established a recognized section.
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    return None
+
+
+def _marker_positions(
+    elements: tuple[etree._Element, ...],
+    style_names: dict[str, str | None],
+    profile: FormatProfile,
+) -> dict[str, int | None]:
+    markers: dict[str, int | None] = {
+        "body": None,
+        "references": None,
+        "appendix": None,
+    }
+    for index, element in enumerate(elements, start=1):
+        text = _text(element).strip()
+        style_id = _style_id(element)
+        mapped = _mapped_style_role(
+            style_id, style_names.get(style_id) if style_id else None, profile
+        )
+        patterns = _pattern_roles(text, profile)
+        if markers["body"] is None and (
+            mapped == "heading_1" or "heading_1" in patterns
+        ):
+            markers["body"] = index
+        if markers["references"] is None and text == "参考文献":
+            markers["references"] = index
+        if markers["appendix"] is None and (
+            mapped == "appendix_heading" or "appendix_heading" in patterns
+        ):
+            markers["appendix"] = index
+    return markers
+
+
+def _resolve_paragraphs(
+    elements: tuple[etree._Element, ...],
+    package: OoxmlPackage,
+    profile: FormatProfile,
+) -> tuple[SemanticParagraph, ...]:
+    styles = _style_map(package)
+    relationships = package.relationships()
+    relationship_by_id = _relationship_map(relationships)
+    markers = _marker_positions(elements, styles, profile)
+    result: list[SemanticParagraph] = []
+    seen_heading_level = 0
+    regional_counts: dict[str, int] = {}
+
+    for index, element in enumerate(elements, start=1):
+        raw_text = _text(element)
+        text = raw_text.strip()
+        style_id = _style_id(element)
+        style_name = styles.get(style_id) if style_id else None
+        fields = _fields(element)
+        bookmarks = _bookmarks(element)
+        evidence: list[_Evidence] = []
+        warnings: list[str] = []
+
+        style_role = _mapped_style_role(style_id, style_name, profile)
+        if style_role in AUTOMATIC_ROLES:
+            evidence.append(_Evidence(style_role, "word_style"))
+
+        explicit_role, explicit_conflict = _explicit_role(
+            element, fields, bookmarks
+        )
+        if explicit_conflict:
+            warnings.append("ROLE.CONFLICT")
+        elif explicit_role:
+            evidence.append(_Evidence(explicit_role, "explicit_structure"))
+
+        pattern_roles = _pattern_roles(text, profile)
+        if len(pattern_roles) > 1:
+            warnings.append("ROLE.AMBIGUOUS")
+        elif pattern_roles:
+            pattern_role = next(iter(pattern_roles))
+            region = _region_for(index, markers)
+            if pattern_role != "reference" or region == "references":
+                evidence.append(_Evidence(pattern_role, "text_pattern"))
+
+        region = _region_for(index, markers)
+        regional_index = regional_counts.get(region, 0)
+        regional_counts[region] = regional_index + 1
+        position_role = _position_role(
+            region=region,
+            text=text,
+            regional_index=regional_index,
+            profile=profile,
+        )
+        if position_role:
+            evidence.append(_Evidence(position_role, "document_position"))
+
+        roles = {item.role for item in evidence}
+        if len(roles) > 1 or explicit_conflict:
+            role = None
+            source = None
+            repairable = False
+            warnings = ["ROLE.CONFLICT"]
+        elif len(roles) == 1:
+            role = next(iter(roles))
+            source = next(item.source for item in evidence if item.role == role)
+            repairable = True
+        else:
+            role = None
+            source = None
+            repairable = False
+            if text and not warnings:
+                warnings.append("ROLE.AMBIGUOUS")
+
+        level = HEADING_LEVELS.get(role or "")
+        if level is not None:
+            if level > seen_heading_level + 1:
+                repairable = False
+                warnings.append("ROLE.SKIPPED_HEADING_LEVEL")
+            if level == 1:
+                seen_heading_level = 1
+            elif level <= seen_heading_level + 1:
+                seen_heading_level = level
+
+        result.append(
+            SemanticParagraph(
+                location=f"paragraph:{index}",
+                raw_text=raw_text,
+                style_id=style_id,
+                style_name=style_name,
+                role=role,
+                role_source=source,
+                repairable=repairable,
+                manual_number_token=_manual_number(text),
+                fields=fields,
+                relationship_identity=_element_relationships(
+                    element, relationship_by_id
+                ),
+                bookmarks=bookmarks,
+                warnings=tuple(dict.fromkeys(warnings)),
+            )
+        )
+    return tuple(result)
+
+
+def _tables(
+    document_root: etree._Element,
+    relationships: tuple[Relationship, ...],
+) -> tuple[SemanticTable, ...]:
+    by_id = _relationship_map(relationships)
+    result: list[SemanticTable] = []
+    for index, table in enumerate(
+        document_root.xpath("./w:body//w:tbl", namespaces=NS), start=1
+    ):
+        rows = table.xpath("./w:tr", namespaces=NS)
+        columns = max(
+            (len(row.xpath("./w:tc", namespaces=NS)) for row in rows),
+            default=0,
+        )
+        row_texts = [
+            "\t".join(_text(cell) for cell in row.xpath("./w:tc", namespaces=NS))
+            for row in rows
+        ]
+        result.append(
+            SemanticTable(
+                location=f"table:{index}",
+                raw_text="\n".join(row_texts),
+                row_count=len(rows),
+                column_count=columns,
+                relationship_identity=_element_relationships(table, by_id),
+            )
+        )
+    return tuple(result)
+
+
+def _sections(document_root: etree._Element) -> tuple[SemanticSection, ...]:
+    body = document_root.find("w:body", namespaces=NS)
+    if body is None:
+        return ()
+    result: list[SemanticSection] = []
+    paragraph_index = 0
+    for element in body.iterchildren():
+        if element.tag == f"{{{W_NS}}}p":
+            paragraph_index += 1
+            section_properties = element.find("./w:pPr/w:sectPr", namespaces=NS)
+        elif element.tag == f"{{{W_NS}}}sectPr":
+            section_properties = element
+        else:
+            section_properties = None
+        if section_properties is None:
+            continue
+        result.append(
+            SemanticSection(
+                location=f"section:{len(result) + 1}",
+                start_paragraph=1 if not result else paragraph_index + 1,
+                header_relationship_ids=tuple(
+                    section_properties.xpath(
+                        "./w:headerReference/@r:id", namespaces=NS
+                    )
+                ),
+                footer_relationship_ids=tuple(
+                    section_properties.xpath(
+                        "./w:footerReference/@r:id", namespaces=NS
+                    )
+                ),
+            )
+        )
+    return tuple(result)
+
+
+def _styles(package: OoxmlPackage) -> tuple[SemanticStyle, ...]:
+    if "word/styles.xml" not in package.parts:
+        return ()
+    values: list[SemanticStyle] = []
+    for style in package.xml("word/styles.xml").xpath("./w:style", namespaces=NS):
+        style_id = style.get(f"{{{W_NS}}}styleId")
+        if not style_id:
+            continue
+        names = style.xpath("./w:name/@w:val", namespaces=NS)
+        values.append(
+            SemanticStyle(
+                style_id=style_id,
+                name=names[0] if names else None,
+                style_type=style.get(f"{{{W_NS}}}type"),
+            )
+        )
+    return tuple(values)
+
+
+def _numbering(package: OoxmlPackage) -> tuple[SemanticNumbering, ...]:
+    if "word/numbering.xml" not in package.parts:
+        return ()
+    values: list[SemanticNumbering] = []
+    for num in package.xml("word/numbering.xml").xpath("./w:num", namespaces=NS):
+        num_id = num.get(f"{{{W_NS}}}numId")
+        if not num_id:
+            continue
+        abstracts = num.xpath("./w:abstractNumId/@w:val", namespaces=NS)
+        values.append(
+            SemanticNumbering(
+                num_id=num_id,
+                abstract_num_id=abstracts[0] if abstracts else None,
+            )
+        )
+    return tuple(values)
+
+
+def _story_paragraphs(
+    package: OoxmlPackage,
+    relationship_kind: str,
+    profile: FormatProfile,
+) -> tuple[SemanticParagraph, ...]:
+    result: list[SemanticParagraph] = []
+    style_names = _style_map(package)
+    relationships = package.relationships()
+    for section_index, (_, part_name) in enumerate(
+        package.related_parts("word/document.xml", relationship_kind), start=1
+    ):
+        root = package.xml(part_name)
+        elements = tuple(root.xpath(".//w:p", namespaces=NS))
+        relationship_by_id = _relationship_map(relationships, part_name)
+        for paragraph_index, element in enumerate(elements, start=1):
+            fields = _fields(element)
+            style_id = _style_id(element)
+            result.append(
+                SemanticParagraph(
+                    location=(
+                        f"{relationship_kind}:{section_index}:"
+                        f"paragraph:{paragraph_index}"
+                    ),
+                    raw_text=_text(element),
+                    style_id=style_id,
+                    style_name=style_names.get(style_id) if style_id else None,
+                    role=None,
+                    role_source=None,
+                    repairable=False,
+                    manual_number_token=_manual_number(_text(element).strip()),
+                    fields=fields,
+                    relationship_identity=_element_relationships(
+                        element, relationship_by_id
+                    ),
+                    bookmarks=_bookmarks(element),
+                    warnings=(),
+                    part_name=part_name,
+                )
+            )
+    return tuple(result)
+
+
+def inspect_document(
+    path: str | Path, profile: FormatProfile
+) -> SemanticDocument:
+    """Inspect a DOCX without mutating it or guessing unsupported semantics."""
+
+    package = OoxmlPackage.open(path)
+    document_root = package.xml("word/document.xml")
+    body = document_root.find("w:body", namespaces=NS)
+    if body is None:
+        from thesis_format.ooxml import OoxmlError
+
+        raise OoxmlError("word/document.xml has no w:body")
+    paragraph_elements = tuple(body.xpath(".//w:p", namespaces=NS))
+    paragraphs = _resolve_paragraphs(paragraph_elements, package, profile)
+    relationships = package.relationships()
+    headers = _story_paragraphs(package, "header", profile)
+    footers = _story_paragraphs(package, "footer", profile)
+    bookmarks = tuple(
+        dict.fromkeys(
+            bookmark
+            for node in (*paragraphs, *headers, *footers)
+            for bookmark in node.bookmarks
+        )
+    )
+    warnings = tuple(
+        dict.fromkeys(
+            warning for node in paragraphs for warning in node.warnings
+        )
+    )
+    return SemanticDocument(
+        path=Path(path),
+        paragraphs=paragraphs,
+        tables=_tables(document_root, relationships),
+        sections=_sections(document_root),
+        styles=_styles(package),
+        numbering=_numbering(package),
+        relationships=relationships,
+        bookmarks=bookmarks,
+        headers=headers,
+        footers=footers,
+        warnings=warnings,
+    )
