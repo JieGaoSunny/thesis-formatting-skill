@@ -127,7 +127,16 @@ class _StyleMetadata:
 
 
 def _text(element: etree._Element) -> str:
-    return "".join(element.xpath(".//w:t/text()", namespaces=NS))
+    text: list[str] = []
+    for descendant in element.iter():
+        local_name = etree.QName(descendant).localname
+        if local_name == "t" and descendant.text:
+            text.append(descendant.text)
+        elif local_name in {"br", "cr"}:
+            text.append("\n")
+        elif local_name == "tab":
+            text.append("\t")
+    return "".join(text)
 
 
 def _fields(element: etree._Element) -> tuple[str, ...]:

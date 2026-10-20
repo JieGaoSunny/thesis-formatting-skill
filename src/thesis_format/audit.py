@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import Counter
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -236,7 +237,9 @@ def _section_region(
 
 def _on(element: etree._Element | None) -> bool:
     value = _attr(element, "val")
-    return element is not None and value not in {"0", "false", "off"}
+    return element is not None and (
+        value is None or value.casefold() not in {"0", "false", "off", "no"}
+    )
 
 
 def _style_elements(context: AuditContext) -> dict[str, etree._Element]:
@@ -275,14 +278,98 @@ def _latest(
     return result
 
 
+def _effective_formatting_property(
+    context: AuditContext,
+    *,
+    style_id: str | None,
+    property_group: str,
+    property_name: str,
+    direct: etree._Element | None = None,
+) -> etree._Element | None:
+    styles = _style_elements(context)
+    candidates: list[etree._Element] = []
+    if "word/styles.xml" in context.package.parts:
+        root = context.package.xml("word/styles.xml")
+        default = root.find(
+            f"w:docDefaults/w:{property_group}Default/"
+            f"w:{property_group}/w:{property_name}",
+            namespaces=NS,
+        )
+        if default is not None:
+            candidates.append(default)
+    if style_id:
+        candidates.extend(
+            candidate
+            for style in _effective_style(styles, style_id)
+            if (
+                candidate := style.find(
+                    f"w:{property_group}/w:{property_name}",
+                    namespaces=NS,
+                )
+            )
+            is not None
+        )
+    if direct is not None:
+        candidates.append(direct)
+    if not candidates:
+        return None
+    effective = etree.Element(candidates[-1].tag)
+    for candidate in candidates:
+        effective.attrib.update(candidate.attrib)
+        for child in candidate:
+            existing = effective.find(child.tag)
+            if existing is not None:
+                effective.remove(existing)
+            effective.append(deepcopy(child))
+    return effective
+
+
+def _paragraph_style_id(
+    context: AuditContext,
+    paragraph: etree._Element,
+) -> str | None:
+    explicit = _attr(
+        paragraph.find("w:pPr/w:pStyle", namespaces=NS),
+        "val",
+    )
+    if explicit or "word/styles.xml" not in context.package.parts:
+        return explicit
+    defaults = context.package.xml("word/styles.xml").xpath(
+        "./w:style[@w:type='paragraph' and @w:default='1']/@w:styleId",
+        namespaces=NS,
+    )
+    return defaults[0] if defaults else None
+
+
+def _effective_paragraph_property(
+    context: AuditContext,
+    paragraph: etree._Element,
+    property_name: str,
+) -> etree._Element | None:
+    return _effective_formatting_property(
+        context,
+        style_id=_paragraph_style_id(context, paragraph),
+        property_group="pPr",
+        property_name=property_name,
+        direct=paragraph.find(f"w:pPr/w:{property_name}", namespaces=NS),
+    )
+
+
 def _style_snapshot(
     context: AuditContext, role: str, style_id: str
 ) -> dict[str, object]:
-    chain = _effective_style(_style_elements(context), style_id)
-    spacing = _latest(chain, "w:pPr/w:spacing")
-    ind = _latest(chain, "w:pPr/w:ind")
-    fonts = _latest(chain, "w:rPr/w:rFonts")
-    size = _latest(chain, "w:rPr/w:sz")
+    def property_value(group: str, name: str) -> etree._Element | None:
+        return _effective_formatting_property(
+            context,
+            style_id=style_id,
+            property_group=group,
+            property_name=name,
+        )
+
+    spacing = property_value("pPr", "spacing")
+    ind = property_value("pPr", "ind")
+    fonts = property_value("rPr", "rFonts")
+    size = property_value("rPr", "sz")
     line_rule = _attr(spacing, "lineRule") or "auto"
     line = _float_attr_value(spacing, "line")
     if line_rule == "exact":
@@ -299,7 +386,7 @@ def _style_snapshot(
         "style_id": style_id,
         "role": role,
         "paragraph": {
-            "alignment": _attr(_latest(chain, "w:pPr/w:jc"), "val"),
+            "alignment": _attr(property_value("pPr", "jc"), "val"),
             "line_spacing": line_spacing,
             "space_before_pt": _pt_from_twips(_attr(spacing, "before")) or 0,
             "space_after_pt": _pt_from_twips(_attr(spacing, "after")) or 0,
@@ -310,10 +397,8 @@ def _style_snapshot(
             ),
             "left_indent_mm": _mm_from_twips(_attr(ind, "left")) or 0,
             "hanging_indent_mm": _mm_from_twips(_attr(ind, "hanging")) or 0,
-            "keep_with_next": _on(_latest(chain, "w:pPr/w:keepNext")),
-            "page_break_before": _on(
-                _latest(chain, "w:pPr/w:pageBreakBefore")
-            ),
+            "keep_with_next": _on(property_value("pPr", "keepNext")),
+            "page_break_before": _on(property_value("pPr", "pageBreakBefore")),
         },
         "run": {
             "font_zh": _attr(fonts, "eastAsia"),
@@ -323,8 +408,8 @@ def _style_snapshot(
                 if _attr(size, "val") is None
                 else float(_attr(size, "val")) / 2
             ),
-            "bold": _on(_latest(chain, "w:rPr/w:b")),
-            "italic": _on(_latest(chain, "w:rPr/w:i")),
+            "bold": _on(property_value("rPr", "b")),
+            "italic": _on(property_value("rPr", "i")),
         },
     }
 
@@ -616,7 +701,6 @@ class NumberingRule:
                 )
             elif node.role == "appendix_heading" and not (
                 has_numbering
-                or any(field.upper().startswith("SEQ ") for field in node.fields)
             ):
                 yield AuditFinding(
                     "NUMBERING.MANUAL_APPENDIX",
@@ -634,38 +718,118 @@ def _has_heading_numbering(
     node,
     paragraph: etree._Element,
 ) -> bool:
-    num_ids = paragraph.xpath("./w:pPr/w:numPr/w:numId/@w:val", namespaces=NS)
+    num_pr = _effective_paragraph_property(context, paragraph, "numPr")
+    num_ids = (
+        num_pr.xpath("./w:numId/@w:val", namespaces=NS)
+        if num_pr is not None
+        else ()
+    )
     if (
         not num_ids
         or num_ids[0] == "0"
         or "word/numbering.xml" not in context.package.parts
     ):
         return False
-    levels = paragraph.xpath("./w:pPr/w:numPr/w:ilvl/@w:val", namespaces=NS)
+    levels = (
+        num_pr.xpath("./w:ilvl/@w:val", namespaces=NS)
+        if num_pr is not None
+        else ()
+    )
     try:
         level = int(levels[0]) if levels else 0
     except ValueError:
         return False
-    expected_level = {"heading_1": 0, "heading_2": 1, "heading_3": 2}.get(node.role)
+    expected_level = {
+        "heading_1": 0,
+        "heading_2": 1,
+        "heading_3": 2,
+        "appendix_heading": 0,
+    }.get(node.role)
     if expected_level != level:
         return False
     numbering = context.package.xml("word/numbering.xml")
-    abstract_ids = numbering.xpath(
-        f"./w:num[@w:numId='{num_ids[0]}']/w:abstractNumId/@w:val",
+    num_nodes = numbering.xpath(
+        f"./w:num[@w:numId='{num_ids[0]}']",
         namespaces=NS,
     )
-    if not abstract_ids:
+    if not num_nodes:
         return False
-    level_nodes = numbering.xpath(
-        f"./w:abstractNum[@w:abstractNumId='{abstract_ids[0]}']"
-        f"/w:lvl[@w:ilvl='{level}']",
+    num_node = num_nodes[0]
+    overridden_levels = num_node.xpath(
+        f"./w:lvlOverride[@w:ilvl='{level}']/w:lvl",
         namespaces=NS,
     )
-    if not level_nodes:
+    if overridden_levels:
+        level_node = overridden_levels[0]
+    else:
+        abstract_ids = num_node.xpath(
+            "./w:abstractNumId/@w:val",
+            namespaces=NS,
+        )
+        if not abstract_ids:
+            return False
+        level_nodes = numbering.xpath(
+            f"./w:abstractNum[@w:abstractNumId='{abstract_ids[0]}']"
+            f"/w:lvl[@w:ilvl='{level}']",
+            namespaces=NS,
+        )
+        if not level_nodes:
+            return False
+        level_node = level_nodes[0]
+
+    profile_rule = {
+        "heading_1": context.profile.numbering.chapters,
+        "heading_2": context.profile.numbering.sections,
+        "heading_3": context.profile.numbering.sections,
+        "appendix_heading": context.profile.numbering.appendices,
+    }[node.role]
+    expected_formats = {
+        "chinese_chapter": {"chineseCounting"},
+        "decimal": {"decimal"},
+        "upper_alpha": {"upperLetter"},
+    }
+    number_format = _attr(level_node.find("w:numFmt", namespaces=NS), "val")
+    if number_format not in expected_formats.get(profile_rule.format, set()):
         return False
-    level_node = level_nodes[0]
-    formats = level_node.xpath("./w:numFmt/@w:val", namespaces=NS)
-    if not formats or formats[0] in {"bullet", "none"}:
+    level_text = _attr(level_node.find("w:lvlText", namespaces=NS), "val")
+    suffix = {
+        "space": " ",
+        "tab": "\t",
+        "nothing": "",
+    }.get(_attr(level_node.find("w:suff", namespaces=NS), "val"), "\t")
+    expected_core = {
+        "chinese_chapter": "第%1章",
+        "upper_alpha": "附录 %1",
+        "decimal": profile_rule.separator.join(
+            f"%{index}" for index in range(1, level + 2)
+        ),
+    }.get(profile_rule.format)
+    if profile_rule.format == "decimal":
+        text_matches = level_text == expected_core
+    else:
+        text_matches = (
+            level_text == f"{expected_core}{profile_rule.separator}"
+            or (
+                level_text == expected_core
+                and suffix == profile_rule.separator
+            )
+        )
+    if not text_matches:
+        return False
+    restart_value = _attr(
+        level_node.find("w:lvlRestart", namespaces=NS),
+        "val",
+    )
+    if profile_rule.restart_scope == "document":
+        if restart_value not in {None, "0"}:
+            return False
+    elif profile_rule.restart_scope == "chapter":
+        if level == 0 or restart_value not in {None, "1"}:
+            return False
+    elif profile_rule.restart_scope == "appendix":
+        if restart_value is None:
+            return False
+    else:
         return False
     style_ids = level_node.xpath("./w:pStyle/@w:val", namespaces=NS)
     style_matches = bool(
@@ -680,6 +844,20 @@ def _has_heading_numbering(
         outline_values and outline_values[0] == str(expected_level)
     )
     abstract = level_node.getparent()
+    if etree.QName(abstract).localname == "lvlOverride":
+        abstract_ids = num_node.xpath(
+            "./w:abstractNumId/@w:val",
+            namespaces=NS,
+        )
+        abstracts = (
+            numbering.xpath(
+                f"./w:abstractNum[@w:abstractNumId='{abstract_ids[0]}']",
+                namespaces=NS,
+            )
+            if abstract_ids
+            else ()
+        )
+        abstract = abstracts[0] if abstracts else abstract
     multi_types = abstract.xpath("./w:multiLevelType/@w:val", namespaces=NS)
     multilevel_matches = bool(
         multi_types
@@ -710,10 +888,32 @@ def _has_caption_numbering(context: AuditContext, node) -> bool:
         re.search(r"\\s\s+1\b", field, re.IGNORECASE)
         for field in sequence_fields
     )
-    heading_styles = {
-        name.casefold() for name in context.profile.styles["heading_1"].word_styles
-    }
-    has_chapter_reference = any(
+    profile_rule = (
+        context.profile.numbering.figures
+        if label == "figure"
+        else context.profile.numbering.tables
+    )
+    restart_matches = {
+        "document": not has_restarting_sequence,
+        "chapter": has_restarting_sequence,
+        "appendix": has_restarting_sequence,
+    }.get(profile_rule.restart_scope, False)
+    reference_fields = tuple(
+        field for field in fields if re.match(r"^STYLEREF\b", field, re.IGNORECASE)
+    )
+    reference_role = {
+        "chapter": "heading_1",
+        "appendix": "appendix_heading",
+    }.get(profile_rule.restart_scope)
+    expected_styles = (
+        {
+            name.casefold()
+            for name in context.profile.styles[reference_role].word_styles
+        }
+        if reference_role is not None
+        else set()
+    )
+    has_scope_reference = any(
         (
             match := re.match(
                 r"^STYLEREF\s+\"?([^\"\\]+?)\"?(?:\s+\\|$)",
@@ -721,10 +921,25 @@ def _has_caption_numbering(context: AuditContext, node) -> bool:
                 re.IGNORECASE,
             )
         )
-        and match.group(1).strip().casefold() in heading_styles
-        for field in fields
+        and match.group(1).strip().casefold() in expected_styles
+        for field in reference_fields
     )
-    return has_restarting_sequence and has_chapter_reference
+    reference_matches = (
+        not reference_fields
+        if profile_rule.restart_scope == "document"
+        else has_scope_reference
+    )
+    number_pairs = re.findall(
+        r"(?<!\w)(?:\d+|[A-Z]+|[一二三四五六七八九十百千]+)"
+        r"([-.、])\d+(?!\w)",
+        node.raw_text,
+        re.IGNORECASE,
+    )
+    separator_matches = (
+        len(number_pairs) == 1
+        and number_pairs[0] == profile_rule.separator
+    )
+    return restart_matches and reference_matches and separator_matches
 
 
 class FieldRule:
@@ -911,7 +1126,9 @@ class TableRule:
             first_row = table.find("w:tr", namespaces=NS)
             repeat_header = (
                 first_row is not None
-                and first_row.find("w:trPr/w:tblHeader", namespaces=NS) is not None
+                and _on(
+                    first_row.find("w:trPr/w:tblHeader", namespaces=NS)
+                )
             )
             if context.profile.tables.repeat_header and not repeat_header:
                 yield AuditFinding(
@@ -924,7 +1141,7 @@ class TableRule:
                     True,
                 )
             splittable_rows = sum(
-                row.find("w:trPr/w:cantSplit", namespaces=NS) is None
+                not _on(row.find("w:trPr/w:cantSplit", namespaces=NS))
                 for row in table.findall("w:tr", namespaces=NS)
             )
             if not context.profile.tables.allow_row_split and splittable_rows:
@@ -1005,8 +1222,12 @@ class ReferenceRule:
         ):
             if node.role != "reference":
                 continue
-            spacing = paragraph.find("w:pPr/w:spacing", namespaces=NS)
-            ind = paragraph.find("w:pPr/w:ind", namespaces=NS)
+            spacing = _effective_paragraph_property(
+                context,
+                paragraph,
+                "spacing",
+            )
+            ind = _effective_paragraph_property(context, paragraph, "ind")
             line_rule = _attr(spacing, "lineRule") or "auto"
             line = _float_attr_value(spacing, "line")
             actual = {
@@ -1376,7 +1597,10 @@ def _story_paragraph_alignment(context: AuditContext, node) -> str:
     root = context.package.xml(node.part_name)
     paragraphs = root.xpath(".//w:p", namespaces=NS)
     paragraph = paragraphs[paragraph_number - 1]
-    return _attr(paragraph.find("w:pPr/w:jc", namespaces=NS), "val") or "left"
+    return (
+        _attr(_effective_paragraph_property(context, paragraph, "jc"), "val")
+        or "left"
+    )
 
 
 def _styleref_targets(field: str, expected_styles: set[str]) -> bool:
@@ -1402,7 +1626,14 @@ class PrivacyRule:
         ):
             text = node.raw_text
             for pattern in context.profile.privacy.generic_patterns:
-                flags = re.IGNORECASE if "i" in pattern.flags else 0
+                flags = re.NOFLAG
+                for flag, value in {
+                    "i": re.IGNORECASE,
+                    "m": re.MULTILINE,
+                    "u": re.UNICODE,
+                }.items():
+                    if flag in pattern.flags:
+                        flags |= value
                 if re.search(pattern.regex, text, flags):
                     yield AuditFinding(
                         f"PRIVACY.PATTERN.{pattern.id.upper().replace('-', '_')}",

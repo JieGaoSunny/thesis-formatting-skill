@@ -16,7 +16,7 @@ from thesis_format.audit import (
     render_audit_markdown,
 )
 from thesis_format.contracts import validate_audit
-from thesis_format.profile import load_profile
+from thesis_format.profile import PrivacyPattern, load_profile
 from thesis_format.semantic import inspect_document
 
 from helpers.docx_factory import build_docx
@@ -118,6 +118,51 @@ def _set_num_format(path: Path, num_id: str, value: str) -> None:
         if num_fmt is None:
             num_fmt = etree.SubElement(level, f"{W}numFmt")
         num_fmt.set(f"{W}val", value)
+    _replace_part(path, "word/numbering.xml", root)
+
+
+def _set_numbering_level(
+    path: Path,
+    num_id: str,
+    level: int,
+    *,
+    num_format: str,
+    level_text: str,
+    style_id: str,
+    restart: int | None = None,
+    suffix: str | None = None,
+) -> None:
+    root = _xml(path, "word/numbering.xml")
+    abstract_id = root.xpath(
+        f"./w:num[@w:numId='{num_id}']/w:abstractNumId/@w:val",
+        namespaces=NS,
+    )[0]
+    abstract = root.xpath(
+        f"./w:abstractNum[@w:abstractNumId='{abstract_id}']",
+        namespaces=NS,
+    )[0]
+    multi_level = abstract.find("w:multiLevelType", namespaces=NS)
+    if multi_level is None:
+        multi_level = etree.SubElement(abstract, f"{W}multiLevelType")
+    multi_level.set(f"{W}val", "multilevel")
+    levels = abstract.xpath(f"./w:lvl[@w:ilvl='{level}']", namespaces=NS)
+    level_node = levels[0] if levels else etree.SubElement(abstract, f"{W}lvl")
+    level_node.set(f"{W}ilvl", str(level))
+    for name in ("numFmt", "lvlText", "pStyle", "lvlRestart", "suff"):
+        existing = level_node.find(f"w:{name}", namespaces=NS)
+        if existing is not None:
+            level_node.remove(existing)
+    etree.SubElement(level_node, f"{W}numFmt", {f"{W}val": num_format})
+    etree.SubElement(level_node, f"{W}lvlText", {f"{W}val": level_text})
+    etree.SubElement(level_node, f"{W}pStyle", {f"{W}val": style_id})
+    if restart is not None:
+        etree.SubElement(
+            level_node,
+            f"{W}lvlRestart",
+            {f"{W}val": str(restart)},
+        )
+    if suffix is not None:
+        etree.SubElement(level_node, f"{W}suff", {f"{W}val": suffix})
     _replace_part(path, "word/numbering.xml", root)
 
 
@@ -283,6 +328,270 @@ def test_num_id_zero_unrelated_styleref_and_bullet_are_not_heading_numbering(
     assert "NUMBERING.MANUAL_HEADING" in _rule_ids(zero)
     assert "NUMBERING.MANUAL_HEADING" in _rule_ids(styleref)
     assert "NUMBERING.MANUAL_HEADING" in _rule_ids(bullet)
+
+
+def test_heading_numbering_enforces_profile_format_separator_and_restart(
+    tmp_path: Path,
+) -> None:
+    chapter = build_docx(
+        tmp_path / "chapter.docx",
+        [
+            {
+                "text": "第一章 绪论",
+                "style": "AppleHeading1",
+                "numbering_level": 0,
+            }
+        ],
+    )
+    _set_numbering_level(
+        chapter,
+        "1",
+        0,
+        num_format="chineseCounting",
+        level_text="第%1章",
+        style_id="AppleHeading1",
+        restart=0,
+        suffix="space",
+    )
+    assert "NUMBERING.MANUAL_HEADING" not in _rule_ids(chapter)
+
+    _set_numbering_level(
+        chapter,
+        "1",
+        0,
+        num_format="decimal",
+        level_text="第%1章 ",
+        style_id="AppleHeading1",
+        restart=0,
+    )
+    assert "NUMBERING.MANUAL_HEADING" in _rule_ids(chapter)
+
+    section = build_docx(
+        tmp_path / "section.docx",
+        [
+            {
+                "text": "1.1 研究背景",
+                "style": "AppleHeading2",
+                "numbering_level": 1,
+            }
+        ],
+    )
+    _set_numbering_level(
+        section,
+        "1",
+        1,
+        num_format="decimal",
+        level_text="%1.%2",
+        style_id="AppleHeading2",
+        restart=1,
+    )
+    assert "NUMBERING.MANUAL_HEADING" not in _rule_ids(section)
+
+    _set_numbering_level(
+        section,
+        "1",
+        1,
+        num_format="decimal",
+        level_text="%1-%2",
+        style_id="AppleHeading2",
+        restart=0,
+    )
+    assert "NUMBERING.MANUAL_HEADING" in _rule_ids(section)
+
+
+def test_appendix_numbering_enforces_upper_alpha_profile(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "appendix.docx",
+        [
+            {
+                "text": "附录 A 调查表",
+                "style": "AppleAppendixHeading",
+                "numbering_level": 0,
+            }
+        ],
+    )
+    _set_numbering_level(
+        path,
+        "1",
+        0,
+        num_format="upperLetter",
+        level_text="附录 %1 ",
+        style_id="AppleAppendixHeading",
+        restart=0,
+    )
+    assert "NUMBERING.MANUAL_APPENDIX" not in _rule_ids(path)
+
+    _set_numbering_level(
+        path,
+        "1",
+        0,
+        num_format="decimal",
+        level_text="附录 %1 ",
+        style_id="AppleAppendixHeading",
+        restart=0,
+    )
+    assert "NUMBERING.MANUAL_APPENDIX" in _rule_ids(path)
+
+
+def test_appendix_unrelated_sequence_field_is_not_valid_numbering(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "appendix-sequence.docx",
+        [
+            {
+                "text": "附录 A 调查表",
+                "style": "AppleAppendixHeading",
+                "field": "SEQ Appendix",
+            }
+        ],
+    )
+
+    assert "NUMBERING.MANUAL_APPENDIX" in _rule_ids(path)
+
+
+def test_heading_numbering_resolves_num_pr_from_style_chain(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "style-numbering.docx",
+        [{"text": "第一章 绪论", "style": "AppleHeading1"}],
+    )
+    styles = _xml(path, "word/styles.xml")
+    heading = styles.xpath(
+        "./w:style[@w:styleId='AppleHeading1']",
+        namespaces=NS,
+    )[0]
+    etree.SubElement(heading, f"{W}basedOn", {f"{W}val": "NumberedBase"})
+    base = etree.SubElement(
+        styles,
+        f"{W}style",
+        {f"{W}type": "paragraph", f"{W}styleId": "NumberedBase"},
+    )
+    p_pr = etree.SubElement(base, f"{W}pPr")
+    num_pr = etree.SubElement(p_pr, f"{W}numPr")
+    etree.SubElement(num_pr, f"{W}ilvl", {f"{W}val": "0"})
+    etree.SubElement(num_pr, f"{W}numId", {f"{W}val": "1"})
+    _replace_part(path, "word/styles.xml", styles)
+    _set_numbering_level(
+        path,
+        "1",
+        0,
+        num_format="chineseCounting",
+        level_text="第%1章",
+        style_id="AppleHeading1",
+        restart=0,
+        suffix="space",
+    )
+
+    assert "NUMBERING.MANUAL_HEADING" not in _rule_ids(path)
+
+
+def test_caption_numbering_enforces_profile_separator(tmp_path: Path) -> None:
+    correct = build_docx(
+        tmp_path / "figure-correct.docx",
+        [
+            {
+                "text": "图 1-1 苹果树",
+                "style": "AppleFigureCaption",
+                "fields": [
+                    "STYLEREF AppleHeading1",
+                    "SEQ Figure \\s 1",
+                ],
+            }
+        ],
+    )
+    wrong = build_docx(
+        tmp_path / "figure-wrong.docx",
+        [
+            {
+                "text": "图 1.1 苹果树",
+                "style": "AppleFigureCaption",
+                "fields": [
+                    "STYLEREF AppleHeading1",
+                    "SEQ Figure \\s 1",
+                ],
+            }
+        ],
+    )
+
+    assert "NUMBERING.MANUAL_CAPTION" not in _rule_ids(correct)
+    assert "NUMBERING.MANUAL_CAPTION" in _rule_ids(wrong)
+
+
+def test_caption_requires_a_rendered_number_pair_for_separator_validation(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "figure-no-number.docx",
+        [
+            {
+                "text": "图 苹果树",
+                "style": "AppleFigureCaption",
+                "fields": [
+                    "STYLEREF AppleHeading1",
+                    "SEQ Figure \\s 1",
+                ],
+            }
+        ],
+    )
+
+    assert "NUMBERING.MANUAL_CAPTION" in _rule_ids(path)
+
+
+def test_caption_styleref_follows_configured_restart_scope(
+    tmp_path: Path,
+) -> None:
+    document_scoped = build_docx(
+        tmp_path / "document-caption.docx",
+        [
+            {
+                "text": "图 1-1 苹果树",
+                "style": "AppleFigureCaption",
+                "field": "SEQ Figure",
+            }
+        ],
+    )
+    figure_rule = replace(
+        PROFILE.numbering.figures,
+        restart_scope="document",
+    )
+    document_profile = replace(
+        PROFILE,
+        numbering=replace(PROFILE.numbering, figures=figure_rule),
+    )
+    assert (
+        "NUMBERING.MANUAL_CAPTION"
+        not in _rule_ids_for_profile(document_scoped, document_profile)
+    )
+
+    appendix_scoped = build_docx(
+        tmp_path / "appendix-caption.docx",
+        [
+            {
+                "text": "图 A-1 苹果树",
+                "style": "AppleFigureCaption",
+                "fields": [
+                    "STYLEREF AppleAppendixHeading",
+                    "SEQ Figure \\s 1",
+                ],
+            }
+        ],
+    )
+    appendix_rule = replace(
+        PROFILE.numbering.figures,
+        restart_scope="appendix",
+    )
+    appendix_profile = replace(
+        PROFILE,
+        numbering=replace(PROFILE.numbering, figures=appendix_rule),
+    )
+    assert (
+        "NUMBERING.MANUAL_CAPTION"
+        not in _rule_ids_for_profile(appendix_scoped, appendix_profile)
+    )
 
 
 @pytest.mark.parametrize(
@@ -458,6 +767,42 @@ def test_three_line_table_requires_visible_top_header_bottom_and_bottom(
     assert "TABLE.BORDERS.THREE_LINE" in _rule_ids(path)
 
 
+@pytest.mark.parametrize("false_value", ["false", "0", "off", "no"])
+def test_table_boolean_values_follow_ooxml_on_off_semantics(
+    tmp_path: Path,
+    false_value: str,
+) -> None:
+    path = build_docx(
+        tmp_path / f"table-bool-{false_value}.docx",
+        [{"text": "表 1-1", "style": "AppleTableCaption"}],
+        add_table=True,
+    )
+    root = _xml(path, "word/document.xml")
+    row = root.find(".//w:tbl/w:tr", namespaces=NS)
+    assert row is not None
+    tr_pr = etree.Element(f"{W}trPr")
+    row.insert(0, tr_pr)
+    etree.SubElement(tr_pr, f"{W}tblHeader", {f"{W}val": false_value})
+    etree.SubElement(tr_pr, f"{W}cantSplit", {f"{W}val": false_value})
+    _replace_part(path, "word/document.xml", root)
+
+    rule_ids = _rule_ids(path)
+    assert "TABLE.REPEAT_HEADER" in rule_ids
+    assert "TABLE.ROW_SPLIT" in rule_ids
+
+    root = _xml(path, "word/document.xml")
+    for element in root.xpath(
+        ".//w:tbl/w:tr/w:trPr/*[self::w:tblHeader or self::w:cantSplit]",
+        namespaces=NS,
+    ):
+        element.attrib.pop(f"{W}val", None)
+    _replace_part(path, "word/document.xml", root)
+
+    rule_ids = _rule_ids(path)
+    assert "TABLE.REPEAT_HEADER" not in rule_ids
+    assert "TABLE.ROW_SPLIT" not in rule_ids
+
+
 def test_reference_line_spacing_distinguishes_exact_from_auto(
     tmp_path: Path,
 ) -> None:
@@ -480,6 +825,120 @@ def test_reference_line_spacing_distinguishes_exact_from_auto(
     )
     _set_paragraph_spacing(auto, 2, line=320, line_rule="auto")
     assert "REFERENCE.PARAGRAPH_FORMAT" in _rule_ids(auto)
+
+
+def test_reference_formatting_resolves_style_chain_and_document_defaults(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "reference-inherited.docx",
+        [
+            {"text": "参考文献"},
+            {"text": "Reference entry", "style": "AppleReference"},
+        ],
+    )
+    root = _xml(path, "word/styles.xml")
+    reference = root.xpath(
+        "./w:style[@w:styleId='AppleReference']",
+        namespaces=NS,
+    )[0]
+    for name in ("pPr", "basedOn"):
+        existing = reference.find(f"w:{name}", namespaces=NS)
+        if existing is not None:
+            reference.remove(existing)
+    etree.SubElement(reference, f"{W}basedOn", {f"{W}val": "ReferenceBase"})
+    base = etree.SubElement(
+        root,
+        f"{W}style",
+        {f"{W}type": "paragraph", f"{W}styleId": "ReferenceBase"},
+    )
+    base_p_pr = etree.SubElement(base, f"{W}pPr")
+    etree.SubElement(
+        base_p_pr,
+        f"{W}spacing",
+        {
+            f"{W}line": "320",
+            f"{W}lineRule": "exact",
+            f"{W}before": "0",
+            f"{W}after": "0",
+        },
+    )
+    defaults = root.find("w:docDefaults", namespaces=NS)
+    assert defaults is not None
+    p_pr_default = defaults.find("w:pPrDefault", namespaces=NS)
+    if p_pr_default is None:
+        p_pr_default = etree.SubElement(defaults, f"{W}pPrDefault")
+    default_p_pr = p_pr_default.find("w:pPr", namespaces=NS)
+    if default_p_pr is None:
+        default_p_pr = etree.SubElement(p_pr_default, f"{W}pPr")
+    ind = default_p_pr.find("w:ind", namespaces=NS)
+    if ind is None:
+        ind = etree.SubElement(default_p_pr, f"{W}ind")
+    ind.set(f"{W}hanging", "567")
+    _replace_part(path, "word/styles.xml", root)
+
+    assert "REFERENCE.PARAGRAPH_FORMAT" not in _rule_ids(path)
+
+
+def test_footer_alignment_resolves_paragraph_style_inheritance(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "footer-inherited.docx",
+        [{"text": "第一章 正文", "style": "AppleHeading1"}],
+        add_header_footer=True,
+    )
+    footer = _xml(path, "word/footer1.xml")
+    paragraph = footer.find(".//w:p", namespaces=NS)
+    assert paragraph is not None
+    p_pr = paragraph.find("w:pPr", namespaces=NS)
+    if p_pr is None:
+        p_pr = etree.Element(f"{W}pPr")
+        paragraph.insert(0, p_pr)
+    for justification in p_pr.findall("w:jc", namespaces=NS):
+        p_pr.remove(justification)
+    p_style = p_pr.find("w:pStyle", namespaces=NS)
+    if p_style is None:
+        p_style = etree.SubElement(p_pr, f"{W}pStyle")
+    p_style.set(f"{W}val", "InheritedFooter")
+    _replace_part(path, "word/footer1.xml", footer)
+
+    styles = _xml(path, "word/styles.xml")
+    inherited = etree.SubElement(
+        styles,
+        f"{W}style",
+        {f"{W}type": "paragraph", f"{W}styleId": "InheritedFooter"},
+    )
+    etree.SubElement(inherited, f"{W}basedOn", {f"{W}val": "FooterBase"})
+    base = etree.SubElement(
+        styles,
+        f"{W}style",
+        {f"{W}type": "paragraph", f"{W}styleId": "FooterBase"},
+    )
+    base_p_pr = etree.SubElement(base, f"{W}pPr")
+    etree.SubElement(base_p_pr, f"{W}jc", {f"{W}val": "center"})
+    _replace_part(path, "word/styles.xml", styles)
+
+    assert "HEADER.FOOTER.PAGE_ALIGNMENT" not in _rule_ids(path)
+
+
+def test_privacy_generic_pattern_honors_multiline_flag(tmp_path: Path) -> None:
+    path = build_docx(
+        tmp_path / "privacy-multiline.docx",
+        [{"text": "public\nPRIVATE\ntext"}],
+    )
+    privacy = replace(
+        PROFILE.privacy,
+        generic_patterns=(
+            PrivacyPattern(id="multiline", regex="^private$", flags="imu"),
+        ),
+    )
+    profile = replace(PROFILE, privacy=privacy)
+
+    assert (
+        "PRIVACY.PATTERN.MULTILINE"
+        in _rule_ids_for_profile(path, profile)
+    )
 
 
 def test_header_linking_uses_targets_and_dynamic_sources_require_styleref(
