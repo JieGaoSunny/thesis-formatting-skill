@@ -11,7 +11,7 @@
   ],
   "findings": [
     {
-      "finding_id": "f490f185da7d7ff7",
+      "finding_id": "8f8dc4e7ded42ad8",
       "rule_id": "PRIVACY.DENYLIST",
       "severity": "error",
       "path": "README.md",
@@ -20,7 +20,7 @@
       "message": "A private denylist term was found."
     },
     {
-      "finding_id": "04bb6eb67e91b1c1",
+      "finding_id": "e205c505680e435b",
       "rule_id": "PRIVACY.EMAIL",
       "severity": "warning",
       "path": "docs/example.md",

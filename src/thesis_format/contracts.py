@@ -95,20 +95,56 @@ def _normalize(value: Any) -> Any:
     return value
 
 
-def _reject_non_finite_floats(
+def _validate_canonical_compatibility(
     value: Any, path: tuple[str | int, ...] = ()
 ) -> None:
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, int):
+        try:
+            binary64 = float(value)
+        except OverflowError:
+            binary64 = math.inf
+        if not math.isfinite(binary64) or int(binary64) != value:
+            raise ContractError(
+                f"integer {value} is not exactly representable as an IEEE-754 "
+                "binary64, as required by this I-JSON/JCS input policy",
+                path,
+            )
+        return
     if isinstance(value, float):
         if not math.isfinite(value):
             raise ContractError("contract inputs must contain only finite numbers", path)
         return
+    if isinstance(value, str):
+        if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+            raise ContractError(
+                "canonical JSON strings cannot contain lone surrogates", path
+            )
+        return
     if isinstance(value, Mapping):
+        normalized_keys: set[str] = set()
         for key, item in value.items():
-            _reject_non_finite_floats(item, (*path, key))
+            if not isinstance(key, str):
+                raise ContractError(
+                    "canonical JSON object keys must be strings", path
+                )
+            normalized_key = unicodedata.normalize("NFC", key)
+            if normalized_key in normalized_keys:
+                raise ContractError(
+                    f"duplicate object key after NFC normalization: {normalized_key!r}",
+                    (*path, key),
+                )
+            normalized_keys.add(normalized_key)
+            _validate_canonical_compatibility(item, (*path, key))
         return
     if isinstance(value, (list, tuple)):
         for index, item in enumerate(value):
-            _reject_non_finite_floats(item, (*path, index))
+            _validate_canonical_compatibility(item, (*path, index))
+        return
+    raise ContractError(
+        f"unsupported canonical JSON value type {type(value).__name__!r}", path
+    )
 
 
 def _expand_decimal(mantissa: str, exponent: int) -> str:
@@ -286,16 +322,15 @@ def _report_item_digest(schema_version: str, item: Mapping[str, Any]) -> str:
 def _privacy_finding_digest(
     schema_version: str, item: Mapping[str, Any]
 ) -> str:
-    payload = "|".join(
-        (
+    return canonical_sha256(
+        [
             schema_version,
-            unicodedata.normalize("NFC", item["rule_id"]),
-            unicodedata.normalize("NFC", item["path"]),
-            unicodedata.normalize("NFC", item["location"]),
+            item["rule_id"],
+            item["path"],
+            item["location"],
             item["redacted_match_sha256"],
-        )
+        ]
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _validate_payload_ids(
@@ -896,7 +931,7 @@ SEMANTIC_VALIDATORS = {
 def validate_contract(contract_name: str, instance: Any) -> None:
     """Validate a contract against JSON Schema and semantic invariants."""
 
-    _reject_non_finite_floats(instance)
+    _validate_canonical_compatibility(instance)
     schema = load_schema(contract_name)
     validator = Draft202012Validator(schema, format_checker=FormatChecker())
     error = next(iter(validator.iter_errors(instance)), None)

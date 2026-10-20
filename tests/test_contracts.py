@@ -74,14 +74,14 @@ def report_item_id(item: dict, schema_version: str = "1.0") -> str:
 
 
 def privacy_finding_id(item: dict, schema_version: str = "1.0") -> str:
-    payload = "|".join(
-        (
+    payload = canonical_json(
+        [
             schema_version,
             item["rule_id"],
-            unicodedata.normalize("NFC", item["path"]),
-            unicodedata.normalize("NFC", item["location"]),
+            item["path"],
+            item["location"],
             item["redacted_match_sha256"],
-        )
+        ]
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
@@ -408,6 +408,24 @@ def test_every_contract_rejects_nested_non_finite_float(
         validate_contract(contract_name, document)
 
 
+def test_transformation_rejects_inexact_binary64_integer_in_difference() -> None:
+    transformation = fixture("transformation-result")
+    transformation["content_comparison"]["equivalent"] = False
+    transformation["content_comparison"]["differences"] = [
+        {
+            "node_id": "paragraph:1",
+            "before": {"count": 9007199254740993},
+            "after": {"count": 9007199254740992},
+        }
+    ]
+
+    with pytest.raises(
+        ContractError,
+        match=r"content_comparison.*differences.*before.*count.*binary64",
+    ):
+        validate_contract("transformation-result", transformation)
+
+
 def test_format_profile_rejects_non_positive_or_infeasible_geometry() -> None:
     profile = fixture("format-profile")
     profile["page"]["body"]["left_mm"] = 0
@@ -713,6 +731,23 @@ def test_duplicate_collection_semantic_keys_are_rejected(
 
     with pytest.raises(ContractError, match=r"duplicate semantic key|full digest"):
         validate_contract(contract_name, report)
+
+
+def test_privacy_finding_ids_do_not_collide_when_path_or_location_contains_pipe() -> None:
+    report = fixture("privacy-report")
+    first = copy.deepcopy(report["findings"][0])
+    second = copy.deepcopy(report["findings"][0])
+    first["path"] = "a"
+    first["location"] = "b|c"
+    second["path"] = "a|b"
+    second["location"] = "c"
+    first["finding_id"] = privacy_finding_id(first)
+    second["finding_id"] = privacy_finding_id(second)
+    report["findings"] = [first, second]
+    report["summary"] = {"errors": 2, "violations": 0, "warnings": 0}
+
+    assert first["finding_id"] != second["finding_id"]
+    validate_contract("privacy-report", report)
 
 
 @pytest.mark.parametrize("obsolete_field", ["matched_text", "replacement", "match_hash"])
