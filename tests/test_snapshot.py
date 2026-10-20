@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from io import BytesIO
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from docx import Document
+from docx.enum.section import WD_SECTION_START
+from docx.shared import Inches
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from jsonschema import Draft202012Validator
 
-from thesis_format.contracts import canonical_json, load_schema
+from thesis_format.contracts import canonical_json, canonical_sha256, load_schema
 from thesis_format.profile import load_profile
 from thesis_format.snapshot import (
     assign_node_ids,
@@ -47,7 +51,9 @@ def _save(document: Document, path: Path) -> Path:
     return path
 
 
-def _add_image_relationship(path: Path, media: bytes = b"same-image") -> None:
+def _add_image_relationship(
+    path: Path, media: bytes = b"same-image", *, occurrences: int = 1
+) -> None:
     replacement = path.with_suffix(".replacement.docx")
     with ZipFile(path) as source, ZipFile(
         replacement, "w", compression=ZIP_DEFLATED
@@ -67,7 +73,7 @@ def _add_image_relationship(path: Path, media: bytes = b"same-image") -> None:
                     "</pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline>"
                     "</w:drawing></w:r>"
                 ).encode()
-                data = data.replace(marker, drawing + marker, 1)
+                data = data.replace(marker, drawing * occurrences + marker, 1)
             elif info.filename == "word/_rels/document.xml.rels":
                 relationship = (
                     b'<Relationship Id="rIdSnapshotImage" '
@@ -78,6 +84,28 @@ def _add_image_relationship(path: Path, media: bytes = b"same-image") -> None:
             target.writestr(info, data)
         target.writestr("word/media/snapshot.bin", media)
     replacement.replace(path)
+
+
+def _append_equation(paragraph, text: str) -> None:
+    math_paragraph = OxmlElement("m:oMathPara")
+    math = OxmlElement("m:oMath")
+    run = OxmlElement("m:r")
+    value = OxmlElement("m:t")
+    value.text = text
+    run.append(value)
+    math.append(run)
+    math_paragraph.append(math)
+    paragraph._p.append(math_paragraph)
+
+
+def _png() -> BytesIO:
+    return BytesIO(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000d49444154789c6360f8cfc000000301010018dd8db10000000049454e44"
+            "ae426082"
+        )
+    )
 
 
 def _snapshot(nodes: list[dict[str, object]]) -> dict[str, object]:
@@ -186,10 +214,40 @@ def test_extracts_figure_alt_text_and_target_sha256(tmp_path: Path) -> None:
     snapshot = extract_snapshot(path, PROFILE)
     image = next(node for node in snapshot["body"] if node["node_type"] == "image")
 
-    import hashlib
-
     assert image["normalized_text"] == "Café tree"
-    assert image["relationship_hash"] == hashlib.sha256(b"same-image").hexdigest()
+    content_hash = hashlib.sha256(b"same-image").hexdigest()
+    assert image["relationship_hash"] == canonical_sha256(
+        [content_hash, "body", 1]
+    )
+
+
+def test_repeated_identical_images_and_tables_get_distinct_occurrence_identities(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    document.add_paragraph("anchor")
+    for _ in range(2):
+        table = document.add_table(rows=1, cols=1)
+        table.cell(0, 0).text = "same cell"
+    path = _save(document, tmp_path / "repeated-objects.docx")
+    _add_image_relationship(path, occurrences=2)
+
+    snapshot = extract_snapshot(path, PROFILE)
+    images = [node for node in snapshot["body"] if node["node_type"] == "image"]
+    tables = [node for node in snapshot["body"] if node["node_type"] == "table"]
+
+    assert len(images) == 2
+    image_content_hash = hashlib.sha256(b"same-image").hexdigest()
+    assert [node["relationship_hash"] for node in images] == [
+        canonical_sha256([image_content_hash, "body", 1]),
+        canonical_sha256([image_content_hash, "body", 2]),
+    ]
+    assert len(tables) == 2
+    table_content_hash = canonical_sha256(["same cell"])
+    assert [node["relationship_hash"] for node in tables] == [
+        canonical_sha256([table_content_hash, "body", 1]),
+        canonical_sha256([table_content_hash, "body", 2]),
+    ]
 
 
 def test_duplicate_nodes_get_ordinals_and_prefix_collisions_extend() -> None:
@@ -277,6 +335,66 @@ def test_compare_allows_only_declared_caption_move_adjacent_to_same_object() -> 
 
     assert comparison["equivalent"] is True
     assert comparison["differences"] == []
+
+
+@pytest.mark.parametrize(
+    ("object_type", "rule_id"),
+    [
+        ("image", "FIGURE.CAPTION.POSITION"),
+        ("table", "TABLE.CAPTION.POSITION"),
+    ],
+)
+def test_compare_rejects_caption_move_to_wrong_identical_object_occurrence(
+    object_type: str,
+    rule_id: str,
+) -> None:
+    first_identity = "1" * 64
+    second_identity = "2" * 64
+    first_caption = _node("a" * 16, "First caption", 0, node_type="caption")
+    first_object = _node(
+        "b" * 16,
+        "same object",
+        1,
+        node_type=object_type,
+        relationship_hash=first_identity,
+    )
+    second_caption = _node("c" * 16, "Second caption", 2, node_type="caption")
+    second_object = _node(
+        "d" * 16,
+        "same object",
+        3,
+        node_type=object_type,
+        relationship_hash=second_identity,
+    )
+    after_nodes = [
+        first_object,
+        second_caption,
+        second_object,
+        first_caption,
+    ]
+    after = [
+        {**node, "source_location": {**node["source_location"], "index": index}}
+        for index, node in enumerate(after_nodes)
+    ]
+
+    comparison = compare_snapshots(
+        _snapshot([first_caption, first_object, second_caption, second_object]),
+        _snapshot(after),
+        changes=[
+            {
+                "rule_id": rule_id,
+                "operation": "move_caption",
+                "status": "applied",
+                "node_id": first_caption["node_id"],
+                "relationship_sha256": first_identity,
+            }
+        ],
+    )
+
+    assert comparison["equivalent"] is False
+    assert {difference["kind"] for difference in comparison["differences"]} == {
+        "reordered"
+    }
 
 
 @pytest.mark.parametrize(
@@ -435,6 +553,135 @@ def test_extracts_notes_and_equations_deterministically(tmp_path: Path) -> None:
         ("footnote", "Second note"),
         ("endnote", "End note"),
     ]
+
+
+def test_resolves_each_header_footer_type_independently_across_sections(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    document.settings.odd_and_even_pages_header_footer = True
+    first = document.sections[0]
+    first.different_first_page_header_footer = True
+    first.header.paragraphs[0].text = "S1 default header"
+    first.first_page_header.paragraphs[0].text = "S1 first header"
+    first.even_page_header.paragraphs[0].text = "S1 even header"
+    first.footer.paragraphs[0].text = "S1 default footer"
+    first.first_page_footer.paragraphs[0].text = "S1 first footer"
+    first.even_page_footer.paragraphs[0].text = "S1 even footer"
+
+    second = document.add_section(WD_SECTION_START.NEW_PAGE)
+    second.different_first_page_header_footer = True
+    second.header.is_linked_to_previous = False
+    second.header.paragraphs[0].text = "S2 default header"
+    second.first_page_footer.is_linked_to_previous = False
+    second.first_page_footer.paragraphs[0].text = "S2 first footer"
+
+    snapshot = extract_snapshot(
+        _save(document, tmp_path / "typed-inheritance.docx"), PROFILE
+    )
+
+    assert [node["normalized_text"] for node in snapshot["headers"]] == [
+        "S1 default header",
+        "S1 first header",
+        "S1 even header",
+        "S2 default header",
+        "S1 first header",
+        "S1 even header",
+    ]
+    assert [node["normalized_text"] for node in snapshot["footers"]] == [
+        "S1 default footer",
+        "S1 first footer",
+        "S1 even footer",
+        "S1 default footer",
+        "S2 first footer",
+        "S1 even footer",
+    ]
+    assert "/header[default]/" in snapshot["headers"][3]["source_location"]["path"]
+    assert "/header[first]/" in snapshot["headers"][4]["source_location"]["path"]
+    assert "/footer[first]/" in snapshot["footers"][4]["source_location"]["path"]
+
+
+def test_extracts_typed_story_text_images_equations_and_tables(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    header = document.sections[0].first_page_header
+    document.sections[0].different_first_page_header_footer = True
+    header.paragraphs[0].text = "Header text"
+    image_run = header.add_paragraph().add_run()
+    inline = image_run.add_picture(_png(), width=Inches(0.1))
+    inline._inline.docPr.set("descr", "Header image")
+    _append_equation(header.add_paragraph(), "h + 1")
+    header_table = header.add_table(rows=1, cols=1, width=Inches(1))
+    header_table.cell(0, 0).text = "Header cell"
+
+    footer = document.sections[0].even_page_footer
+    document.settings.odd_and_even_pages_header_footer = True
+    footer.paragraphs[0].text = "Footer text"
+    _append_equation(footer.add_paragraph(), "f + 1")
+    footer_table = footer.add_table(rows=1, cols=1, width=Inches(1))
+    footer_table.cell(0, 0).text = "Footer cell"
+
+    snapshot = extract_snapshot(
+        _save(document, tmp_path / "typed-story-content.docx"), PROFILE
+    )
+
+    assert [
+        (node["node_type"], node["normalized_text"])
+        for node in snapshot["headers"]
+    ] == [
+        ("header", "Header text"),
+        ("image", "Header image"),
+        ("equation", "h + 1"),
+        ("table", "Header cell"),
+    ]
+    assert [
+        (node["node_type"], node["normalized_text"])
+        for node in snapshot["footers"]
+    ] == [
+        ("footer", "Footer text"),
+        ("equation", "f + 1"),
+        ("table", "Footer cell"),
+    ]
+
+
+def test_compare_detects_header_image_and_footer_equation_changes(
+    tmp_path: Path,
+) -> None:
+    before_document = Document()
+    header_run = before_document.sections[0].header.paragraphs[0].add_run()
+    inline = header_run.add_picture(_png(), width=Inches(0.1))
+    inline._inline.docPr.set("descr", "Header image")
+    _append_equation(before_document.sections[0].footer.paragraphs[0], "x + 1")
+    before_path = _save(before_document, tmp_path / "typed-before.docx")
+
+    after_path = tmp_path / "typed-after.docx"
+    after_path.write_bytes(before_path.read_bytes())
+    replacement = after_path.with_suffix(".replacement.docx")
+    with ZipFile(after_path) as source, ZipFile(
+        replacement, "w", compression=ZIP_DEFLATED
+    ) as target:
+        for info in source.infolist():
+            data = source.read(info.filename)
+            if info.filename.startswith("word/media/"):
+                data += b"changed"
+            if info.filename.startswith("word/footer") and info.filename.endswith(".xml"):
+                data = data.replace(b"x + 1", b"x + 2")
+            target.writestr(info, data)
+    replacement.replace(after_path)
+
+    comparison = compare_snapshots(
+        extract_snapshot(before_path, PROFILE),
+        extract_snapshot(after_path, PROFILE),
+    )
+
+    assert comparison["equivalent"] is False
+    changed_types = {
+        difference["before"]["node_type"]
+        for difference in comparison["differences"]
+        if difference["kind"] == "changed"
+    }
+    assert changed_types == {"image", "equation"}
 
 
 def test_compare_treats_body_to_header_move_as_remove_and_add() -> None:

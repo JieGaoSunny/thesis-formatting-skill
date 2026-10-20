@@ -501,9 +501,11 @@ def _validate_snapshot(report: dict[str, Any]) -> None:
                     (collection_name, index, "node_id"),
                 )
             seen.add(node_id)
-            if expected_type is not None and node["node_type"] != expected_type:
+            allowed_types = {expected_type, "image", "equation", "table"}
+            if expected_type is not None and node["node_type"] not in allowed_types:
                 raise ContractError(
-                    f"{collection_name} nodes must have node_type {expected_type!r}",
+                    f"{collection_name} nodes must have node_type {expected_type!r}, "
+                    "'image', 'equation', or 'table'",
                     (collection_name, index, "node_type"),
                 )
     _validate_top_id(report, "snapshot_id")

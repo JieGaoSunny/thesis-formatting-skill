@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -184,12 +185,24 @@ def _candidate(
     }
 
 
+@dataclass
+class _ObjectIdentities:
+    counts: Counter[tuple[str, str]] = field(default_factory=Counter)
+
+    def identity(self, content_hash: str, story: str, node_type: str) -> str:
+        key = (story, node_type)
+        self.counts[key] += 1
+        return canonical_sha256([content_hash, story, self.counts[key]])
+
+
 def _images(
     element: etree._Element,
     package: OoxmlPackage,
     part: str,
     base_path: str,
     source_index: int,
+    story: str,
+    object_identities: _ObjectIdentities,
 ) -> list[dict[str, object]]:
     relationships = _relationship_map(package.relationships(), part)
     result: list[dict[str, object]] = []
@@ -211,8 +224,16 @@ def _images(
             for relationship_id in relationship_ids
             if relationship_id in relationships
         ]
-        relationship_hash = canonical_sha256(hashes) if len(hashes) > 1 else (
-            hashes[0] if hashes else None
+        if len(hashes) > 1:
+            content_hash = canonical_sha256(hashes)
+        elif hashes:
+            content_hash = hashes[0]
+        else:
+            content_hash = hashlib.sha256(
+                etree.tostring(drawing, method="c14n", with_comments=False)
+            ).hexdigest()
+        relationship_hash = object_identities.identity(
+            content_hash, story, "image"
         )
         result.append(
             _candidate(
@@ -253,7 +274,9 @@ def _equations(
 
 
 def _story_nodes(
-    package: OoxmlPackage, profile: FormatProfile
+    package: OoxmlPackage,
+    profile: FormatProfile,
+    object_identities: _ObjectIdentities,
 ) -> list[dict[str, object]]:
     body = package.xml("word/document.xml").find("w:body", namespaces=NS)
     if body is None:
@@ -289,6 +312,8 @@ def _story_nodes(
                 "word/document.xml",
                 base_path,
                 source_index,
+                "body",
+                object_identities,
             )
             result.extend(images)
             source_index += len(images)
@@ -313,6 +338,7 @@ def _story_nodes(
                 for cell in cells
             ]
             table_hash = canonical_sha256(normalized_cells)
+            table_identity = object_identities.identity(table_hash, "body", "table")
             cell_offset = 0
             for row_index, row in enumerate(
                 child.xpath("./w:tr", namespaces=NS), start=1
@@ -330,7 +356,7 @@ def _story_nodes(
                                 f"/w:tr[{row_index}]/w:tc[{column_index}]"
                             ),
                             source_index,
-                            table_hash,
+                            table_identity,
                         )
                     )
                     source_index += 1
@@ -345,6 +371,8 @@ def _story_nodes(
                                 f"/w:tr[{row_index}]/w:tc[{column_index}]"
                             ),
                             source_index,
+                            "body",
+                            object_identities,
                         )
                     )
                     source_index = len(result)
@@ -416,20 +444,24 @@ def _section_story_nodes(
     package: OoxmlPackage,
     profile: FormatProfile,
     kind: str,
+    object_identities: _ObjectIdentities,
 ) -> list[dict[str, object]]:
     relationships = _relationship_map(package.relationships(), "word/document.xml")
     sections = package.xml("word/document.xml").xpath(
         ".//w:body/w:p/w:pPr/w:sectPr | .//w:body/w:sectPr", namespaces=NS
     )
-    inherited: list[str] = []
+    inherited: dict[str, str] = {}
     result: list[dict[str, object]] = []
     for section_index, section in enumerate(sections, start=1):
-        references = section.xpath(
-            f"./w:{kind}Reference/@r:id", namespaces=NS
-        )
-        if references:
-            inherited = list(references)
-        for reference_index, relationship_id in enumerate(inherited, start=1):
+        for reference in section.xpath(f"./w:{kind}Reference", namespaces=NS):
+            reference_type = reference.get(f"{W}type", "default")
+            relationship_id = reference.get(f"{R}id")
+            if relationship_id:
+                inherited[reference_type] = relationship_id
+        for reference_type in ("default", "first", "even"):
+            relationship_id = inherited.get(reference_type)
+            if relationship_id is None:
+                continue
             relationship = relationships.get(relationship_id)
             if relationship is None or relationship.target_mode == "External":
                 continue
@@ -437,24 +469,105 @@ def _section_story_nodes(
                 relationship.source_part, relationship.target
             )
             root = package.xml(part)
-            for paragraph_index, paragraph in enumerate(
-                root.xpath(".//w:p", namespaces=NS), start=1
-            ):
-                text = _clean_paragraph(paragraph, profile)
-                if not text:
-                    continue
-                result.append(
-                    _candidate(
-                        kind,
-                        text,
+            story = f"{kind}:section:{section_index}:{reference_type}"
+            paragraph_number = 0
+            table_number = 0
+            for child in root:
+                local = etree.QName(child).localname
+                if local == "p":
+                    paragraph_number += 1
+                    base_path = (
+                        f"/section[{section_index}]/{kind}[{reference_type}]"
+                        f"/w:p[{paragraph_number}]"
+                    )
+                    text = _clean_paragraph(child, profile)
+                    if text:
+                        result.append(
+                            _candidate(
+                                kind,
+                                text,
+                                part,
+                                base_path,
+                                len(result),
+                            )
+                        )
+                    result.extend(
+                        _images(
+                            child,
+                            package,
+                            part,
+                            base_path,
+                            len(result),
+                            story,
+                            object_identities,
+                        )
+                    )
+                    equations = _equations(
+                        child,
                         part,
-                        (
-                            f"/section[{section_index}]/{kind}[{reference_index}]"
-                            f"/w:p[{paragraph_index}]"
-                        ),
+                        base_path,
                         len(result),
                     )
-                )
+                    result.extend(equations)
+                elif local == "tbl":
+                    table_number += 1
+                    base_path = (
+                        f"/section[{section_index}]/{kind}[{reference_type}]"
+                        f"/w:tbl[{table_number}]"
+                    )
+                    cells = child.xpath("./w:tr/w:tc", namespaces=NS)
+                    normalized_cells = [
+                        normalize_text(
+                            " ".join(
+                                _clean_paragraph(paragraph, profile)
+                                for paragraph in cell.xpath(".//w:p", namespaces=NS)
+                            )
+                        )
+                        for cell in cells
+                    ]
+                    table_identity = object_identities.identity(
+                        canonical_sha256(normalized_cells), story, "table"
+                    )
+                    cell_offset = 0
+                    for row_index, row in enumerate(
+                        child.xpath("./w:tr", namespaces=NS), start=1
+                    ):
+                        for column_index, cell in enumerate(
+                            row.xpath("./w:tc", namespaces=NS), start=1
+                        ):
+                            cell_path = (
+                                f"{base_path}/w:tr[{row_index}]/w:tc[{column_index}]"
+                            )
+                            result.append(
+                                _candidate(
+                                    "table",
+                                    normalized_cells[cell_offset],
+                                    part,
+                                    cell_path,
+                                    len(result),
+                                    table_identity,
+                                )
+                            )
+                            cell_offset += 1
+                            result.extend(
+                                _images(
+                                    cell,
+                                    package,
+                                    part,
+                                    cell_path,
+                                    len(result),
+                                    story,
+                                    object_identities,
+                                )
+                            )
+                            result.extend(
+                                _equations(
+                                    cell,
+                                    part,
+                                    cell_path,
+                                    len(result),
+                                )
+                            )
     return result
 
 
@@ -501,11 +614,16 @@ def extract_snapshot(
 
     document_path = Path(path)
     package = OoxmlPackage.open(document_path)
-    body = _story_nodes(package, profile)
+    object_identities = _ObjectIdentities()
+    body = _story_nodes(package, profile, object_identities)
     body.extend(_note_nodes(package, profile, "footnote", len(body)))
     body.extend(_note_nodes(package, profile, "endnote", len(body)))
-    headers = _section_story_nodes(package, profile, "header")
-    footers = _section_story_nodes(package, profile, "footer")
+    headers = _section_story_nodes(
+        package, profile, "header", object_identities
+    )
+    footers = _section_story_nodes(
+        package, profile, "footer", object_identities
+    )
     _assign_ids([body, headers, footers])
     snapshot: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
