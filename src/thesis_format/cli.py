@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from dataclasses import dataclass
@@ -230,13 +231,24 @@ def _require_nonempty_regular_file(path: Path, label: str) -> None:
         )
 
 
-def _validate_render_manifest_file(path: Path) -> None:
+def _validate_render_manifest_file(path: Path) -> Mapping[str, object]:
     _require_nonempty_regular_file(path, "render manifest")
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ValueError(f"invalid render manifest: {path}") from error
     validate_render_manifest(manifest)
+    if not isinstance(manifest, Mapping):
+        raise ValueError(f"invalid render manifest: {path}")
+    return manifest
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _validate_returned_artifacts(paths: Sequence[Path]) -> None:
@@ -316,7 +328,14 @@ def _run_export(args: argparse.Namespace, function: ExportFunction | None) -> in
         function(args.source, args.output, args.manifest)
     )
     _require_nonempty_regular_file(args.output, "PDF output")
-    _validate_render_manifest_file(args.manifest)
+    manifest = _validate_render_manifest_file(args.manifest)
+    actual_pdf_sha256 = _sha256_file(args.output)
+    expected_pdf_sha256 = manifest["raw_pdf_sha256"]
+    if actual_pdf_sha256 != expected_pdf_sha256:
+        raise ValueError(
+            "PDF output SHA-256 does not match render manifest "
+            f"raw_pdf_sha256: {args.output}"
+        )
     _validate_returned_artifacts(
         tuple(
             path

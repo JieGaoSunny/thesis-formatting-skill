@@ -9,11 +9,16 @@ from types import ModuleType
 import pytest
 
 from thesis_format import cli
+from thesis_format.contracts import stable_id
 
 
 ROOT = Path(__file__).parents[1]
 PROFILE = ROOT / "rules" / "apple-university.yaml"
 FIXTURE = ROOT / "tests" / "fixtures" / "minimal-roles.docx"
+RENDER_MANIFEST_FIXTURE = (
+    ROOT / "tests" / "fixtures" / "contracts" / "render-manifest.json"
+)
+PDF_FIXTURE = ROOT / "tests" / "fixtures" / "contracts" / "render-output.pdf"
 
 
 def test_cli_version() -> None:
@@ -414,12 +419,8 @@ def test_default_optional_tool_wrappers_lazy_import_and_dispatch(
 
     def export_document(document: Path, output: Path, manifest: Path) -> list[Path]:
         calls.append(("export", (document, output, manifest)))
-        output.write_bytes(b"pdf")
-        manifest.write_bytes(
-            (
-                ROOT / "tests" / "fixtures" / "contracts" / "render-manifest.json"
-            ).read_bytes()
-        )
+        output.write_bytes(PDF_FIXTURE.read_bytes())
+        manifest.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
         return [output, manifest]
 
     def preview_pdf(document: Path, output_directory: Path) -> list[Path]:
@@ -494,12 +495,8 @@ def test_export_preview_and_release_check_use_injected_functions(
 
     def export(document: Path, output: Path, manifest: Path) -> list[Path]:
         calls.append(("export", (document, output, manifest)))
-        output.write_bytes(b"pdf")
-        manifest.write_bytes(
-            (
-                ROOT / "tests" / "fixtures" / "contracts" / "render-manifest.json"
-            ).read_bytes()
-        )
+        output.write_bytes(PDF_FIXTURE.read_bytes())
+        manifest.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
         return [output, manifest]
 
     def preview(document: Path, output_directory: Path) -> list[Path]:
@@ -815,12 +812,8 @@ def test_export_accepts_valid_json_text_manifest(tmp_path: Path) -> None:
     def provider(
         _source: Path, requested_output: Path, requested_manifest: Path
     ) -> list[Path]:
-        requested_output.write_bytes(b"pdf")
-        requested_manifest.write_bytes(
-            (
-                ROOT / "tests" / "fixtures" / "contracts" / "render-manifest.json"
-            ).read_bytes()
-        )
+        requested_output.write_bytes(PDF_FIXTURE.read_bytes())
+        requested_manifest.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
         return [requested_output, requested_manifest]
 
     result = cli.main(
@@ -838,6 +831,119 @@ def test_export_accepts_valid_json_text_manifest(tmp_path: Path) -> None:
     assert result == 0
 
 
+def test_export_rejects_manifest_hash_mismatch(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+
+    def provider(
+        _source: Path, requested_output: Path, requested_manifest: Path
+    ) -> list[Path]:
+        requested_output.write_bytes(PDF_FIXTURE.read_bytes())
+        stale_manifest = json.loads(
+            RENDER_MANIFEST_FIXTURE.read_text(encoding="utf-8")
+        )
+        stale_manifest["raw_pdf_sha256"] = "0" * 64
+        stale_manifest["render_id"] = stable_id(
+            {
+                key: value
+                for key, value in stale_manifest.items()
+                if key != "render_id"
+            }
+        )
+        requested_manifest.write_text(
+            json.dumps(stale_manifest), encoding="utf-8"
+        )
+        return [requested_output, requested_manifest]
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
+        dependencies=cli.CliDependencies(export_document=provider),
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert str(output) not in captured.out
+
+
+def test_export_rejects_truncated_pdf(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+
+    def provider(
+        _source: Path, requested_output: Path, requested_manifest: Path
+    ) -> list[Path]:
+        pdf_bytes = PDF_FIXTURE.read_bytes()
+        requested_output.write_bytes(pdf_bytes[: len(pdf_bytes) // 2])
+        requested_manifest.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
+        return [requested_output, requested_manifest]
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
+        dependencies=cli.CliDependencies(export_document=provider),
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert str(output) not in captured.out
+
+
+def test_export_rejects_stale_manifest_for_new_pdf(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+
+    def provider(
+        _source: Path, requested_output: Path, requested_manifest: Path
+    ) -> list[Path]:
+        requested_output.write_bytes(PDF_FIXTURE.read_bytes() + b"\n")
+        requested_manifest.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
+        return [requested_output, requested_manifest]
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
+        dependencies=cli.CliDependencies(export_document=provider),
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert str(output) not in captured.out
+
+
 def test_export_accepts_new_pdf_and_manifest_destinations(tmp_path: Path) -> None:
     source = tmp_path / "input.docx"
     output = tmp_path / "output.pdf"
@@ -847,12 +953,8 @@ def test_export_accepts_new_pdf_and_manifest_destinations(tmp_path: Path) -> Non
     def provider(
         _source: Path, requested_output: Path, requested_manifest: Path
     ) -> list[Path]:
-        requested_output.write_bytes(b"pdf")
-        requested_manifest.write_bytes(
-            (
-                ROOT / "tests" / "fixtures" / "contracts" / "render-manifest.json"
-            ).read_bytes()
-        )
+        requested_output.write_bytes(PDF_FIXTURE.read_bytes())
+        requested_manifest.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
         return [requested_output, requested_manifest]
 
     result = cli.main(
