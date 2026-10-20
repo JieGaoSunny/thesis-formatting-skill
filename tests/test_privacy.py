@@ -181,6 +181,24 @@ def test_scans_docx_hidden_parts_relationships_properties_and_media_names(
     } <= locations
 
 
+def test_required_ooxml_entry_names_are_not_treated_as_placeholders(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "thesis.docx"
+    _write_docx(
+        document,
+        {
+            "_rels/.rels": "<Relationships/>",
+            "word/document.xml": "<document/>",
+            "word/_rels/document.xml.rels": "<Relationships/>",
+        },
+    )
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    assert "PRIVACY.UNRESOLVED_PLACEHOLDER" not in _rules(report)
+
+
 def test_docx_forbidden_metadata_keys_come_from_profile_for_all_property_parts(
     tmp_path: Path,
 ) -> None:
@@ -294,6 +312,52 @@ def test_scans_symlink_target_text_without_following_including_broken_links(
     assert set(targets) <= set(report["scanned_files"])  # type: ignore[arg-type]
     serialized = json.dumps(report)
     assert all(target not in serialized for target in targets.values())
+
+
+def test_contained_symlink_scans_target_string_without_following_target(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private@example.test", encoding="utf-8")
+    (repository / "safe-link").symlink_to("../outside.txt")
+
+    report = release_check(repository, PROFILE, DENYLIST)
+
+    assert _rules(report) == []
+    assert report["scanned_files"] == ["safe-link"]
+
+
+def test_rejects_top_level_source_symlink_with_cli_exit_two(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    source = tmp_path / "source"
+    source.symlink_to(target, target_is_directory=True)
+    report_path = tmp_path / "privacy.json"
+
+    with pytest.raises(ValueError, match="privacy scan source is invalid"):
+        release_check(source, PROFILE, DENYLIST)
+
+    result = cli.main(
+        [
+            "release-check",
+            str(source),
+            "--profile",
+            str(PROFILE),
+            "--denylist",
+            str(DENYLIST),
+            "--report",
+            str(report_path),
+        ]
+    )
+
+    assert result == 2
+    assert "privacy scan source is invalid" in capsys.readouterr().err
+    assert not report_path.exists()
 
 
 def test_scans_pdf_text_and_metadata(tmp_path: Path) -> None:
@@ -455,6 +519,26 @@ def test_detects_generic_private_values_fictional_mismatches_and_placeholders(
     assert "PRIVACY.IDENTITY.STUDENT_ID" in rules
     assert "PRIVACY.IDENTITY.COMPANY" in rules
     assert "PRIVACY.UNRESOLVED_PLACEHOLDER" in rules
+
+
+def test_windows_path_detection_excludes_uri_schemes_but_catches_drive_paths(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "thesis.txt"
+    source.write_text(
+        "Documentation: https://example.test/privacy\n"
+        "Local file: C:\\Users\\real-person\\thesis.docx\n",
+        encoding="utf-8",
+    )
+
+    report = release_check(source, PROFILE, DENYLIST)
+
+    absolute_paths = [
+        finding
+        for finding in report["findings"]  # type: ignore[index]
+        if finding["rule_id"] == "PRIVACY.ABSOLUTE_PATH"
+    ]
+    assert len(absolute_paths) == 1
 
 
 def test_identity_match_in_filename_redacts_the_entire_segment(tmp_path: Path) -> None:

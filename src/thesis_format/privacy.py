@@ -55,7 +55,7 @@ _BUILTIN_PATTERNS = (
     (
         "PRIVACY.ABSOLUTE_PATH",
         re.compile(
-            r"(?:[A-Z]:[\\/](?:[^\\/\r\n]+[\\/])*[^\\/\r\n]*|"
+            r"(?:(?<![A-Z0-9+.-])[A-Z]:[\\/](?:[^\\/\r\n]+[\\/])*[^\\/\r\n]*|"
             r"/(?:Users|home)/[^/\s]+(?:/[^\s]*)?)",
             re.IGNORECASE,
         ),
@@ -303,7 +303,14 @@ class _Scanner:
                 "A non-fictional identity value was found.",
             )
 
-    def scan_text(self, text: str, path: str, location: str) -> None:
+    def scan_text(
+        self,
+        text: str,
+        path: str,
+        location: str,
+        *,
+        scan_placeholders: bool = True,
+    ) -> None:
         normalized = _normalized(text)
         for term, normalized_term in self.deny_terms:
             if normalized_term in normalized:
@@ -318,15 +325,16 @@ class _Scanner:
         for rule_id, pattern, message in (*_BUILTIN_PATTERNS, *self.profile_patterns):
             for match in pattern.finditer(text):
                 self.add(rule_id, path, location, match.group(0), message)
-        for pattern in self.placeholder_patterns:
-            for match in pattern.finditer(text):
-                self.add(
-                    "PRIVACY.UNRESOLVED_PLACEHOLDER",
-                    path,
-                    location,
-                    match.group(0),
-                    "An unresolved placeholder was found.",
-                )
+        if scan_placeholders:
+            for pattern in self.placeholder_patterns:
+                for match in pattern.finditer(text):
+                    self.add(
+                        "PRIVACY.UNRESOLVED_PLACEHOLDER",
+                        path,
+                        location,
+                        match.group(0),
+                        "An unresolved placeholder was found.",
+                    )
         expected = self.profile.privacy.fictional_values
         for identity, pattern in _IDENTITY_LABELS:
             for match in pattern.finditer(text):
@@ -387,7 +395,12 @@ class _Scanner:
             with zipfile.ZipFile(path) as package:
                 for name in sorted(package.namelist()):
                     safe_name = self.redact_path(name)
-                    self.scan_text(name, display_path, f"part:{safe_name}")
+                    self.scan_text(
+                        name,
+                        display_path,
+                        f"part:{safe_name}",
+                        scan_placeholders=False,
+                    )
                     if not (
                         name.endswith(".xml")
                         or name.endswith(".rels")
@@ -658,7 +671,7 @@ def release_check(
     source = Path(source)
     profile_path = Path(profile_path)
     denylist = Path(denylist_path) if denylist_path is not None else _default_denylist(source)
-    if not source.is_symlink() and (
+    if source.is_symlink() or (
         not source.exists() or (not source.is_file() and not source.is_dir())
     ):
         raise ValueError("privacy scan source is invalid")

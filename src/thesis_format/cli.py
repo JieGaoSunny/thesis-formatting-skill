@@ -725,7 +725,7 @@ def _run_preview(args: argparse.Namespace, function: PreviewFunction | None) -> 
 def _run_release_check(
     args: argparse.Namespace, function: PrivacyFunction | None
 ) -> int:
-    if not args.source.exists() or (
+    if args.source.is_symlink() or not args.source.exists() or (
         not args.source.is_file() and not args.source.is_dir()
     ):
         raise ValueError("privacy scan source is invalid")
