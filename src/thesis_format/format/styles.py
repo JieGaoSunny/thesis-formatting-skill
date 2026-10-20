@@ -146,7 +146,12 @@ def repair_styles(
             for child in list(p_pr):
                 if etree.QName(child).localname not in {"pStyle", "numPr", "sectPr"}:
                     p_pr.remove(child)
-            for r_pr in paragraph.xpath("./w:r/w:rPr", namespaces=NS):
+            for r_pr in paragraph.xpath(
+                "./w:r[w:t and not(w:commentReference or "
+                "w:footnoteReference or w:endnoteReference or w:drawing or "
+                "w:fldChar or w:instrText)]/w:rPr",
+                namespaces=NS,
+            ):
                 r_pr.getparent().remove(r_pr)
         else:
             continue

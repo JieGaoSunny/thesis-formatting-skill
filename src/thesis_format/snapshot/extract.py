@@ -221,6 +221,17 @@ def _clean_paragraph_text(
         cleaned = normalize_text(cleaned[1:])
     if role == "table_caption" and cleaned.startswith("表 "):
         cleaned = normalize_text(cleaned[1:])
+    if _field_role(paragraph) == role and role in {
+        "figure_caption",
+        "table_caption",
+    }:
+        separator = (
+            profile.numbering.figures.separator
+            if role == "figure_caption"
+            else profile.numbering.tables.separator
+        )
+        if cleaned.startswith(separator):
+            cleaned = normalize_text(cleaned[len(separator) :])
     return cleaned
 
 

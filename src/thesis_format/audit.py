@@ -657,7 +657,12 @@ class StyleRule:
                 "./w:pPr/*[not(self::w:pStyle or self::w:numPr or self::w:sectPr)]",
                 namespaces=NS,
             )
-            direct_r = paragraph.xpath("./w:r/w:rPr/*", namespaces=NS)
+            direct_r = paragraph.xpath(
+                "./w:r[w:t and not(w:commentReference or "
+                "w:footnoteReference or w:endnoteReference or w:drawing or "
+                "w:fldChar or w:instrText)]/w:rPr/*",
+                namespaces=NS,
+            )
             if direct_p or direct_r:
                 yield AuditFinding(
                     "STYLE.DIRECT_FORMATTING",

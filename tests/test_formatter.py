@@ -10,7 +10,9 @@ from docx import Document
 from docx.enum.style import WD_STYLE_TYPE
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.opc.constants import RELATIONSHIP_TYPE
 from docx.shared import Inches
+from lxml import etree
 from PIL import Image
 
 from thesis_format.audit import audit_document
@@ -497,6 +499,278 @@ def test_second_table_caption_uses_second_table_occurrence_hash(
     )
     assert change["status"] == "applied"
     assert change["object_occurrence_sha256"] == table_hashes[1]
+
+
+def test_numbering_repair_allocates_collision_safe_owned_ids_without_changing_lists(
+    tmp_path: Path,
+) -> None:
+    source = build_template(tmp_path / "numbering-collision.docx", PROFILE)
+    DEFECTS["manual_heading_numbers"](source, source)
+    package = OoxmlPackage.open(source)
+    numbering = package.xml("word/numbering.xml")
+    for identifier, level_text in (("910", "•"), ("911", "%1)")):
+        abstract = etree.Element(
+            f"{{{NS['w']}}}abstractNum",
+            {f"{{{NS['w']}}}abstractNumId": identifier},
+        )
+        level = etree.SubElement(
+            abstract,
+            f"{{{NS['w']}}}lvl",
+            {f"{{{NS['w']}}}ilvl": "0"},
+        )
+        etree.SubElement(
+            level, f"{{{NS['w']}}}start", {f"{{{NS['w']}}}val": "1"}
+        )
+        etree.SubElement(
+            level,
+            f"{{{NS['w']}}}numFmt",
+            {f"{{{NS['w']}}}val": "bullet" if identifier == "910" else "decimal"},
+        )
+        etree.SubElement(
+            level,
+            f"{{{NS['w']}}}lvlText",
+            {f"{{{NS['w']}}}val": level_text},
+        )
+        num = etree.Element(
+            f"{{{NS['w']}}}num",
+            {f"{{{NS['w']}}}numId": identifier},
+        )
+        etree.SubElement(
+            num,
+            f"{{{NS['w']}}}abstractNumId",
+            {f"{{{NS['w']}}}val": identifier},
+        )
+        first_num = numbering.find("w:num", namespaces=NS)
+        numbering.insert(
+            numbering.index(first_num) if first_num is not None else len(numbering),
+            abstract,
+        )
+        numbering.append(num)
+    protected = {
+        identifier: (
+            etree.tostring(
+                numbering.xpath(
+                    f"./w:abstractNum[@w:abstractNumId='{identifier}']",
+                    namespaces=NS,
+                )[0],
+                method="c14n",
+            ),
+            etree.tostring(
+                numbering.xpath(
+                    f"./w:num[@w:numId='{identifier}']", namespaces=NS
+                )[0],
+                method="c14n",
+            ),
+        )
+        for identifier in ("910", "911")
+    }
+    package.write(source, {"word/numbering.xml": numbering})
+
+    output = tmp_path / "formatted.docx"
+    format_document(source, output, PROFILE, clock=lambda: NOW)
+
+    result = OoxmlPackage.open(output)
+    result_numbering = result.xml("word/numbering.xml")
+    for identifier, expected in protected.items():
+        assert (
+            etree.tostring(
+                result_numbering.xpath(
+                    f"./w:abstractNum[@w:abstractNumId='{identifier}']",
+                    namespaces=NS,
+                )[0],
+                method="c14n",
+            ),
+            etree.tostring(
+                result_numbering.xpath(
+                    f"./w:num[@w:numId='{identifier}']", namespaces=NS
+                )[0],
+                method="c14n",
+            ),
+        ) == expected
+    heading_num_id = result.xml("word/document.xml").xpath(
+        "string(.//w:p[w:pPr/w:pStyle[@w:val='AppleHeading1']]"
+        "[1]/w:pPr/w:numPr/w:numId/@w:val)",
+        namespaces=NS,
+    )
+    assert heading_num_id not in {"", "910", "911"}
+    abstract_id = result_numbering.xpath(
+        "string(./w:num[@w:numId=$num_id]/w:abstractNumId/@w:val)",
+        namespaces=NS,
+        num_id=heading_num_id,
+    )
+    assert result_numbering.xpath(
+        "./w:abstractNum[@w:abstractNumId=$abstract_id]"
+        "[w:nsid[@w:val='54464844']][w:tmpl[@w:val='48454144']]",
+        namespaces=NS,
+        abstract_id=abstract_id,
+    )
+
+
+def test_caption_repair_preserves_structured_content_and_snapshot(
+    tmp_path: Path,
+) -> None:
+    source = build_template(tmp_path / "structured-caption.docx", PROFILE)
+    image_path = tmp_path / "caption.png"
+    Image.new("RGB", (8, 8), "blue").save(image_path)
+    document = Document(source)
+    caption = next(
+        paragraph
+        for paragraph in document.paragraphs
+        if paragraph.style.name == "AppleFigureCaption"
+    )
+    caption.clear()
+    token = caption.add_run("图 1-1")
+    document.add_comment(token, "Keep this comment", author="Reviewer")
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(
+        qn("r:id"),
+        caption.part.relate_to(
+            "https://example.com/apple",
+            RELATIONSHIP_TYPE.HYPERLINK,
+            is_external=True,
+        ),
+    )
+    hyperlink_run = OxmlElement("w:r")
+    hyperlink_text = OxmlElement("w:t")
+    hyperlink_text.set(qn("xml:space"), "preserve")
+    hyperlink_text.text = " 苹果树"
+    hyperlink_run.append(hyperlink_text)
+    hyperlink.append(hyperlink_run)
+    caption._p.append(hyperlink)
+    _append_test_field(caption, " DATE ")
+    note_run = caption.add_run()
+    note_reference = OxmlElement("w:footnoteReference")
+    note_reference.set(qn("w:id"), "9")
+    note_run._r.append(note_reference)
+    caption.add_run().add_picture(str(image_path), width=Inches(0.1))
+    bookmark_start = OxmlElement("w:bookmarkStart")
+    bookmark_start.set(qn("w:id"), "77")
+    bookmark_start.set(qn("w:name"), "structured_caption")
+    caption._p.insert(1, bookmark_start)
+    bookmark_end = OxmlElement("w:bookmarkEnd")
+    bookmark_end.set(qn("w:id"), "77")
+    caption._p.append(bookmark_end)
+    document.save(source)
+    before_snapshot = extract_snapshot(source, PROFILE)
+    before = OoxmlPackage.open(source).xml("word/document.xml")
+    protected_before = {
+        name: [
+            etree.tostring(element, method="c14n")
+            for element in before.xpath(xpath, namespaces=NS)
+        ]
+        for name, xpath in {
+            "hyperlinks": ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+            "/w:hyperlink",
+            "note_refs": ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+            "//w:footnoteReference/parent::w:r",
+            "comments": ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+            "/*[self::w:commentRangeStart or self::w:commentRangeEnd]"
+            " | .//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+            "//w:commentReference/parent::w:r",
+            "drawings": ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+            "//w:drawing",
+            "bookmarks": ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+            "/*[self::w:bookmarkStart or self::w:bookmarkEnd]",
+        }.items()
+    }
+
+    output = tmp_path / "formatted.docx"
+    report = format_document(source, output, PROFILE, clock=lambda: NOW)
+
+    after_snapshot = extract_snapshot(output, PROFILE)
+    assert report["content_comparison"]["equivalent"] is True, report[
+        "content_comparison"
+    ]
+    assert before_snapshot["body"] == after_snapshot["body"]
+    after = OoxmlPackage.open(output).xml("word/document.xml")
+    for name, xpath in {
+        "hyperlinks": ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+        "/w:hyperlink",
+        "note_refs": ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+        "//w:footnoteReference/parent::w:r",
+        "comments": ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+        "/*[self::w:commentRangeStart or self::w:commentRangeEnd]"
+        " | .//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+        "//w:commentReference/parent::w:r",
+        "drawings": ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+        "//w:drawing",
+        "bookmarks": ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+        "/*[self::w:bookmarkStart or self::w:bookmarkEnd]",
+    }.items():
+        assert [
+            etree.tostring(element, method="c14n")
+            for element in after.xpath(xpath, namespaces=NS)
+        ] == protected_before[name]
+    assert after.xpath(
+        ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+        "//w:instrText[normalize-space(.)='DATE']",
+        namespaces=NS,
+    )
+    assert after.xpath(
+        ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+        "[.//w:instrText[contains(., 'STYLEREF')]]"
+        "[.//w:instrText[contains(., 'SEQ')]]",
+        namespaces=NS,
+    )
+
+
+def test_caption_repair_skips_manual_number_inside_hyperlink(
+    tmp_path: Path,
+) -> None:
+    source = build_template(tmp_path / "unsafe-caption.docx", PROFILE)
+    document = Document(source)
+    caption = next(
+        paragraph
+        for paragraph in document.paragraphs
+        if paragraph.style.name == "AppleFigureCaption"
+    )
+    caption.clear()
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(
+        qn("r:id"),
+        caption.part.relate_to(
+            "https://example.com/number",
+            RELATIONSHIP_TYPE.HYPERLINK,
+            is_external=True,
+        ),
+    )
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = "图 1-1"
+    run.append(text)
+    hyperlink.append(run)
+    caption._p.append(hyperlink)
+    caption.add_run(" 苹果树")
+    document.save(source)
+    before = OoxmlPackage.open(source).xml("word/document.xml")
+    before_caption = etree.tostring(
+        before.xpath(
+            ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]",
+            namespaces=NS,
+        )[0],
+        method="c14n",
+    )
+
+    output = tmp_path / "formatted.docx"
+    report = format_document(source, output, PROFILE, clock=lambda: NOW)
+
+    after = OoxmlPackage.open(output).xml("word/document.xml")
+    assert etree.tostring(
+        after.xpath(
+            ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]",
+            namespaces=NS,
+        )[0],
+        method="c14n",
+    ) == before_caption
+    assert any(
+        change["rule_id"] == "NUMBERING.MANUAL_CAPTION"
+        and change["status"] == "skipped"
+        for change in report["changes"]
+    )
+    assert any(
+        finding["rule_id"] == "NUMBERING.MANUAL_CAPTION"
+        for finding in report["post_audit"]["findings"]
+    )
 
 
 def test_page_number_repair_preserves_footer_text_table_image_and_field(
