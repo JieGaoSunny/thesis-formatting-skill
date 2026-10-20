@@ -4,6 +4,8 @@ import copy
 import hashlib
 import json
 import math
+import re
+import struct
 from importlib import resources
 from pathlib import Path
 
@@ -114,6 +116,20 @@ def value_at_path(value: object, path: tuple[str | int, ...]) -> object:
     return current
 
 
+def numeric_paths(value: object, path: tuple[str | int, ...] = ()):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            yield from numeric_paths(child, (*path, key))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from numeric_paths(child, (*path, index))
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        yield path
+
+
+PROFILE_NUMERIC_PATHS = tuple(numeric_paths(fixture("format-profile")))
+
+
 @pytest.mark.parametrize("contract_name", CONTRACTS)
 def test_unknown_keys_are_rejected_at_every_object_path(contract_name: str) -> None:
     allowed_maps = {
@@ -171,6 +187,66 @@ def test_canonical_json_uses_jcs_number_serialization(
     assert canonical_json(value) == f"{expected}\n"
 
 
+@pytest.mark.parametrize(
+    ("ieee_754", "expected"),
+    [
+        ("0000000000000001", "5e-324"),
+        ("8000000000000001", "-5e-324"),
+        ("7fefffffffffffff", "1.7976931348623157e+308"),
+        ("ffefffffffffffff", "-1.7976931348623157e+308"),
+        ("4340000000000000", "9007199254740992"),
+        ("c340000000000000", "-9007199254740992"),
+        ("4430000000000000", "295147905179352830000"),
+        ("44b52d02c7e14af5", "9.999999999999997e+22"),
+        ("44b52d02c7e14af6", "1e+23"),
+        ("44b52d02c7e14af7", "1.0000000000000001e+23"),
+        ("444b1ae4d6e2ef4e", "999999999999999700000"),
+        ("444b1ae4d6e2ef4f", "999999999999999900000"),
+        ("444b1ae4d6e2ef50", "1e+21"),
+        ("3eb0c6f7a0b5ed8c", "9.999999999999997e-7"),
+        ("3eb0c6f7a0b5ed8d", "0.000001"),
+        ("41b3de4355555553", "333333333.3333332"),
+        ("41b3de4355555554", "333333333.33333325"),
+        ("41b3de4355555555", "333333333.3333333"),
+        ("41b3de4355555556", "333333333.3333334"),
+        ("41b3de4355555557", "333333333.33333343"),
+        ("becbf647612f3696", "-0.0000033333333333333333"),
+        ("43143ff3c1cb0959", "1424953923781206.2"),
+    ],
+)
+def test_canonical_json_matches_rfc_8785_appendix_b_boundaries(
+    ieee_754: str, expected: str
+) -> None:
+    value = struct.unpack(">d", bytes.fromhex(ieee_754))[0]
+
+    assert canonical_json(value) == f"{expected}\n"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (2**53, "9007199254740992"),
+        (-(2**53), "-9007199254740992"),
+        (2**68, "295147905179352830000"),
+    ],
+)
+def test_canonical_json_accepts_exactly_representable_binary64_integers(
+    value: int, expected: str
+) -> None:
+    assert canonical_json(value) == f"{expected}\n"
+
+
+@pytest.mark.parametrize("value", [2**53 + 1, -(2**53 + 1), 2**68 + 1])
+def test_canonical_json_rejects_integers_not_exactly_representable_as_binary64(
+    value: int,
+) -> None:
+    with pytest.raises(
+        ContractError,
+        match="not exactly representable as an IEEE-754 binary64",
+    ):
+        canonical_json(value)
+
+
 @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
 def test_canonical_json_rejects_non_finite_numbers(value: float) -> None:
     with pytest.raises((ContractError, ValueError), match="finite|compliant"):
@@ -181,6 +257,35 @@ def test_stable_ids_use_jcs_number_serialization() -> None:
     expected = hashlib.sha256(b'{"value":100000000000000000000}\n').hexdigest()[:16]
 
     assert stable_id({"value": 1e20}) == expected
+
+
+@pytest.mark.parametrize(
+    "path",
+    PROFILE_NUMERIC_PATHS,
+    ids=lambda path: ".".join(map(str, path)),
+)
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_format_profile_rejects_non_finite_float_at_every_numeric_path(
+    path: tuple[str | int, ...], value: float
+) -> None:
+    profile = fixture("format-profile")
+    parent = value_at_path(profile, path[:-1])
+    parent[path[-1]] = value  # type: ignore[index]
+
+    with pytest.raises(ContractError, match=rf"{re.escape(str(path[-1]))}.*finite"):
+        validate_contract("format-profile", profile)
+
+
+@pytest.mark.parametrize("contract_name", CONTRACTS)
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_every_contract_rejects_nested_non_finite_float(
+    contract_name: str, value: float
+) -> None:
+    document = fixture(contract_name)
+    document["non_finite_probe"] = {"nested": [value]}
+
+    with pytest.raises(ContractError, match=r"non_finite_probe.*nested.*finite"):
+        validate_contract(contract_name, document)
 
 
 def test_format_profile_rejects_non_positive_or_infeasible_geometry() -> None:
@@ -227,7 +332,7 @@ def test_format_profile_compiles_all_configured_regexes(
     profile = fixture("format-profile")
     collection = value_at_path(profile, collection_path)
     assert isinstance(collection, list)
-    collection[0][pattern_key] = "("
+    collection[0][pattern_key] = "^($" if pattern_key == "pattern" else "("
 
     with pytest.raises(ContractError, match=r"regular expression|regex"):
         validate_contract("format-profile", profile)
@@ -247,6 +352,25 @@ def test_format_profile_rejects_incompatible_regex_flags() -> None:
     pattern["flags"] = ["ascii", "unicode"]
 
     with pytest.raises(ContractError, match=r"incompatible|flags"):
+        validate_contract("format-profile", profile)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "第.+章$",
+        "^第.+章",
+        "第.+章",
+        r"^第.+章\$",
+    ],
+)
+def test_format_profile_rejects_role_detection_patterns_without_whole_string_anchors(
+    pattern: str,
+) -> None:
+    profile = fixture("format-profile")
+    profile["role_detection"]["text_patterns"]["heading_1"][0]["pattern"] = pattern
+
+    with pytest.raises(ContractError, match=r"start with \^ and end with an unescaped \$"):
         validate_contract("format-profile", profile)
 
 

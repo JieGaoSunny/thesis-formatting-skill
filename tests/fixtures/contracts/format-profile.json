@@ -416,7 +416,7 @@
       ],
       "keywords": [
         {
-          "pattern": "^(关键词|Keywords)\\s*[:：]",
+          "pattern": "^(关键词|Keywords)\\s*[:：].*$",
           "flags": ["ignore_case", "unicode"],
           "priority": 100
         }
@@ -437,7 +437,7 @@
       ],
       "source_note": [
         {
-          "pattern": "^资料来源[:：]",
+          "pattern": "^资料来源[:：].*$",
           "flags": ["unicode"],
           "priority": 100
         }

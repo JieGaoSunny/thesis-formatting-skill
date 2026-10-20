@@ -28,7 +28,6 @@ CONTRACT_NAMES = frozenset(
         "render-manifest",
     }
 )
-_MAX_SAFE_INTEGER = 2**53 - 1
 _TEXT_PATTERN_FLAGS = {
     "ascii": re.ASCII,
     "ignore_case": re.IGNORECASE,
@@ -97,6 +96,22 @@ def _normalize(value: Any) -> Any:
     return value
 
 
+def _reject_non_finite_floats(
+    value: Any, path: tuple[str | int, ...] = ()
+) -> None:
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ContractError("contract inputs must contain only finite numbers", path)
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _reject_non_finite_floats(item, (*path, key))
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _reject_non_finite_floats(item, (*path, index))
+
+
 def _expand_decimal(mantissa: str, exponent: int) -> str:
     negative = mantissa.startswith("-")
     unsigned = mantissa.removeprefix("-")
@@ -143,11 +158,16 @@ def _serialize_canonical(value: Any) -> str:
     if value is False:
         return "false"
     if isinstance(value, int):
-        if abs(value) > _MAX_SAFE_INTEGER:
+        try:
+            binary64 = float(value)
+        except OverflowError:
+            binary64 = math.inf
+        if not math.isfinite(binary64) or int(binary64) != value:
             raise ContractError(
-                "canonical JSON integers must be exactly representable by IEEE-754"
+                f"integer {value} is not exactly representable as an IEEE-754 "
+                "binary64, as required by this I-JSON/JCS input policy"
             )
-        return str(value)
+        return _serialize_float(binary64)
     if isinstance(value, float):
         return _serialize_float(value)
     if isinstance(value, str):
@@ -533,8 +553,34 @@ def _validate_format_profile(profile: dict[str, Any]) -> None:
     text_patterns = profile["role_detection"]["text_patterns"]
     for role, patterns in text_patterns.items():
         for index, pattern in enumerate(patterns):
+            expression = pattern["pattern"]
+            terminal_dollar_escaped = (
+                expression.endswith("$")
+                and len(expression) >= 2
+                and (
+                    len(expression[:-1])
+                    - len(expression[:-1].rstrip("\\"))
+                )
+                % 2
+                == 1
+            )
+            if (
+                not expression.startswith("^")
+                or not expression.endswith("$")
+                or terminal_dollar_escaped
+            ):
+                raise ContractError(
+                    "role detection patterns must start with ^ and end with an unescaped $",
+                    (
+                        "role_detection",
+                        "text_patterns",
+                        role,
+                        index,
+                        "pattern",
+                    ),
+                )
             _compile_regex(
-                pattern["pattern"],
+                expression,
                 pattern["flags"],
                 _TEXT_PATTERN_FLAGS,
                 (
@@ -575,6 +621,7 @@ SEMANTIC_VALIDATORS = {
 def validate_contract(contract_name: str, instance: Any) -> None:
     """Validate a contract against JSON Schema and semantic invariants."""
 
+    _reject_non_finite_floats(instance)
     schema = load_schema(contract_name)
     validator = Draft202012Validator(schema)
     error = next(iter(validator.iter_errors(instance)), None)
