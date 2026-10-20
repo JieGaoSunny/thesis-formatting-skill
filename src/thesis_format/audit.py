@@ -1167,22 +1167,12 @@ class TableRule:
                     "none",
                 }
 
-            vertical_border_names = (
-                "left",
-                "right",
-                "start",
-                "end",
-                "insideV",
-            )
             header_cells = (
                 first_row.findall("w:tc", namespaces=NS)
                 if first_row is not None
                 else ()
             )
             has_header_bottom = (
-                borders is not None
-                and visible_border(borders.find("w:insideH", namespaces=NS))
-            ) or (
                 bool(header_cells)
                 and all(
                     visible_border(
@@ -1191,26 +1181,33 @@ class TableRule:
                     for cell in header_cells
                 )
             )
-            has_cell_vertical_border = any(
-                visible_border(
-                    cell.find(
-                        f"w:tcPr/w:tcBorders/w:{name}",
-                        namespaces=NS,
-                    )
+            has_extra_table_border = borders is not None and any(
+                visible_border(border)
+                and etree.QName(border).localname not in {"top", "bottom"}
+                for border in borders
+            )
+            has_extra_cell_border = any(
+                visible_border(border)
+                and not (
+                    row_index == 0
+                    and etree.QName(border).localname == "bottom"
                 )
-                for cell in table.findall(".//w:tc", namespaces=NS)
-                for name in vertical_border_names
+                for row_index, row in enumerate(
+                    table.findall("w:tr", namespaces=NS)
+                )
+                for cell in row.findall("w:tc", namespaces=NS)
+                for border in cell.findall(
+                    "w:tcPr/w:tcBorders/*",
+                    namespaces=NS,
+                )
             )
             has_three_line = (
                 borders is not None
                 and visible_border(borders.find("w:top", namespaces=NS))
                 and visible_border(borders.find("w:bottom", namespaces=NS))
                 and has_header_bottom
-                and not any(
-                    visible_border(borders.find(f"w:{name}", namespaces=NS))
-                    for name in vertical_border_names
-                )
-                and not has_cell_vertical_border
+                and not has_extra_table_border
+                and not has_extra_cell_border
             )
             if (
                 context.profile.tables.border_model == "three_line"

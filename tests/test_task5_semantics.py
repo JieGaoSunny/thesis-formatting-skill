@@ -820,6 +820,112 @@ def test_three_line_table_rejects_visible_cell_vertical_borders(
     ) is expected_violation
 
 
+@pytest.mark.parametrize(
+    ("border_value", "expected_violation"),
+    [("single", True), ("nil", False), ("none", False)],
+)
+def test_three_line_table_rejects_table_inside_horizontal_borders(
+    tmp_path: Path,
+    border_value: str,
+    expected_violation: bool,
+) -> None:
+    path = build_docx(
+        tmp_path / f"table-inside-horizontal-{border_value}.docx",
+        [{"text": "表", "field": "SEQ Table \\s 1", "style": "AppleTableCaption"}],
+        add_table=True,
+    )
+    root = _xml(path, "word/document.xml")
+    table = root.find(".//w:tbl", namespaces=NS)
+    assert table is not None
+    first_row = table.find("w:tr", namespaces=NS)
+    assert first_row is not None
+    table.append(deepcopy(first_row))
+    table.append(deepcopy(first_row))
+    tbl_pr = table.find("w:tblPr", namespaces=NS)
+    assert tbl_pr is not None
+    borders = etree.SubElement(tbl_pr, f"{W}tblBorders")
+    for name in ("top", "bottom"):
+        etree.SubElement(borders, f"{W}{name}", {f"{W}val": "single"})
+    etree.SubElement(borders, f"{W}insideH", {f"{W}val": border_value})
+    for cell in first_row.findall("w:tc", namespaces=NS):
+        tc_pr = cell.find("w:tcPr", namespaces=NS)
+        assert tc_pr is not None
+        tc_borders = etree.SubElement(tc_pr, f"{W}tcBorders")
+        etree.SubElement(tc_borders, f"{W}bottom", {f"{W}val": "single"})
+    _replace_part(path, "word/document.xml", root)
+
+    assert (
+        "TABLE.BORDERS.THREE_LINE" in _rule_ids(path)
+    ) is expected_violation
+
+
+@pytest.mark.parametrize(
+    ("row_index", "border_name", "border_value", "expected_violation"),
+    [
+        (0, "bottom", "single", False),
+        (0, "top", "single", True),
+        (0, "insideH", "single", True),
+        (0, "tl2br", "single", True),
+        (0, "tr2bl", "single", True),
+        (1, "top", "single", True),
+        (1, "bottom", "single", True),
+        (1, "insideH", "single", True),
+        (1, "tl2br", "single", True),
+        (2, "tr2bl", "single", True),
+        (1, "bottom", "nil", False),
+        (2, "top", "none", False),
+    ],
+)
+def test_three_line_table_rejects_extra_cell_horizontal_and_diagonal_borders(
+    tmp_path: Path,
+    row_index: int,
+    border_name: str,
+    border_value: str,
+    expected_violation: bool,
+) -> None:
+    path = build_docx(
+        tmp_path / (
+            f"cell-border-row-{row_index}-{border_name}-{border_value}.docx"
+        ),
+        [{"text": "表", "field": "SEQ Table \\s 1", "style": "AppleTableCaption"}],
+        add_table=True,
+    )
+    root = _xml(path, "word/document.xml")
+    table = root.find(".//w:tbl", namespaces=NS)
+    assert table is not None
+    first_row = table.find("w:tr", namespaces=NS)
+    assert first_row is not None
+    table.append(deepcopy(first_row))
+    table.append(deepcopy(first_row))
+    tbl_pr = table.find("w:tblPr", namespaces=NS)
+    assert tbl_pr is not None
+    borders = etree.SubElement(tbl_pr, f"{W}tblBorders")
+    for name in ("top", "bottom"):
+        etree.SubElement(borders, f"{W}{name}", {f"{W}val": "single"})
+    rows = table.findall("w:tr", namespaces=NS)
+    for cell in rows[0].findall("w:tc", namespaces=NS):
+        tc_pr = cell.find("w:tcPr", namespaces=NS)
+        assert tc_pr is not None
+        tc_borders = etree.SubElement(tc_pr, f"{W}tcBorders")
+        etree.SubElement(tc_borders, f"{W}bottom", {f"{W}val": "single"})
+    target_cell = rows[row_index].find("w:tc", namespaces=NS)
+    assert target_cell is not None
+    target_pr = target_cell.find("w:tcPr", namespaces=NS)
+    assert target_pr is not None
+    target_borders = target_pr.find("w:tcBorders", namespaces=NS)
+    if target_borders is None:
+        target_borders = etree.SubElement(target_pr, f"{W}tcBorders")
+    existing = target_borders.find(f"w:{border_name}", namespaces=NS)
+    if existing is None:
+        existing = etree.SubElement(target_borders, f"{W}{border_name}")
+    existing.set(f"{W}val", border_value)
+    _replace_part(path, "word/document.xml", root)
+
+    assert (
+        "TABLE.BORDERS.THREE_LINE" in _rule_ids(path)
+    ) is expected_violation
+
+
 @pytest.mark.parametrize("false_value", ["false", "0", "off", "no"])
 def test_table_boolean_values_follow_ooxml_on_off_semantics(
     tmp_path: Path,
