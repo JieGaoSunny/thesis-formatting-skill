@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0.0",
+  "render_id": "33d56390f1f52214",
+  "raw_pdf_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "structural_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+  "renderer": {"name": "LibreOffice", "version": "24.2", "image_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"},
+  "font_manifest_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+  "locale": "zh-CN",
+  "page_dimensions": {"width_pt": 595.276, "height_pt": 841.89},
+  "named_destinations": [
+    {"name": "chapter-1", "page": 1, "x_pt": 72, "y_pt": 769.89}
+  ],
+  "extracted_text_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+  "font_manifest": [
+    {"postscript_name": "NotoSerifCJKsc-Regular", "family": "Noto Serif CJK SC", "style": "Regular", "embedded": true, "subset": true, "file_sha256": "6666666666666666666666666666666666666666666666666666666666666666"}
+  ],
+  "pages": [
+    {"page": 1, "width_pt": 595.276, "height_pt": 841.89, "perceptual_hash": "0123456789abcdef"},
+    {"page": 2, "width_pt": 595.276, "height_pt": 841.89, "perceptual_hash": "fedcba9876543210"}
+  ]
+}

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thesis-format.example/schemas/v1/render-manifest.schema.json",
+  "title": "Deterministic PDF render manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "render_id", "raw_pdf_sha256", "structural_hash", "renderer", "font_manifest_hash", "locale", "page_dimensions", "named_destinations", "extracted_text_hash", "font_manifest", "pages"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "render_id": {"$ref": "#/$defs/stableId"},
+    "raw_pdf_sha256": {"$ref": "#/$defs/sha256"},
+    "structural_hash": {"$ref": "#/$defs/sha256"},
+    "renderer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "image_digest"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1},
+        "image_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "font_manifest_hash": {"$ref": "#/$defs/sha256"},
+    "locale": {"type": "string", "minLength": 2},
+    "page_dimensions": {"$ref": "#/$defs/dimensions"},
+    "named_destinations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "page", "x_pt", "y_pt"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "page": {"type": "integer", "minimum": 1},
+          "x_pt": {"type": "number", "minimum": 0},
+          "y_pt": {"type": "number", "minimum": 0}
+        }
+      }
+    },
+    "extracted_text_hash": {"$ref": "#/$defs/sha256"},
+    "font_manifest": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["postscript_name", "family", "style", "embedded", "subset", "file_sha256"],
+        "properties": {
+          "postscript_name": {"type": "string", "minLength": 1},
+          "family": {"type": "string", "minLength": 1},
+          "style": {"type": "string", "minLength": 1},
+          "embedded": {"type": "boolean"},
+          "subset": {"type": "boolean"},
+          "file_sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    "pages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["page", "width_pt", "height_pt", "perceptual_hash"],
+        "properties": {
+          "page": {"type": "integer", "minimum": 1},
+          "width_pt": {"type": "number", "exclusiveMinimum": 0},
+          "height_pt": {"type": "number", "exclusiveMinimum": 0},
+          "perceptual_hash": {"type": "string", "pattern": "^[0-9a-f]{16,64}$"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "stableId": {"type": "string", "pattern": "^[0-9a-f]{16}(?:[0-9a-f]{4}){0,12}$"},
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width_pt", "height_pt"],
+      "properties": {
+        "width_pt": {"type": "number", "exclusiveMinimum": 0},
+        "height_pt": {"type": "number", "exclusiveMinimum": 0}
+      }
+    }
+  }
+}

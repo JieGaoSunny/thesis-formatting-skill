@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thesis-format.example/schemas/v1/content-snapshot.schema.json",
+  "title": "Normalized document content snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "snapshot_id", "document_sha256", "body", "headers", "footers"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "snapshot_id": {"$ref": "#/$defs/stableId"},
+    "document_sha256": {"$ref": "#/$defs/sha256"},
+    "body": {"type": "array", "items": {"$ref": "#/$defs/node"}},
+    "headers": {"type": "array", "items": {"$ref": "#/$defs/node"}},
+    "footers": {"type": "array", "items": {"$ref": "#/$defs/node"}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "stableId": {"type": "string", "pattern": "^[0-9a-f]{16}(?:[0-9a-f]{4}){0,12}$"},
+    "sourceLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["part", "path", "index"],
+      "properties": {
+        "part": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "index": {"type": "integer", "minimum": 0}
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "node_type", "source_location", "normalized_text"],
+      "properties": {
+        "node_id": {"type": "string", "minLength": 1},
+        "node_type": {"enum": ["paragraph", "table", "image", "equation", "header", "footer", "footnote", "endnote"]},
+        "source_location": {"$ref": "#/$defs/sourceLocation"},
+        "normalized_text": {"type": "string"},
+        "relationship_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

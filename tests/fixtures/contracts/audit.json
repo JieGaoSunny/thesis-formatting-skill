@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0.0",
+  "audit_id": "972ac7c393740320",
+  "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile_id": "apple-university-thesis",
+  "findings": [
+    {
+      "finding_id": "7ff6afed79b7b4b3",
+      "rule_id": "paragraph.alignment",
+      "severity": "warning",
+      "location": {"node_id": "body-p-0001", "node_type": "paragraph", "source": {"part": "word/document.xml", "path": "/w:document/w:body/w:p[1]", "index": 0, "page": 1}},
+      "message": "Body paragraph is not justified",
+      "before": "left",
+      "after": "justified",
+      "data": [{"name": "expected", "value": "justified"}, {"name": "actual", "value": "left"}]
+    },
+    {
+      "finding_id": "b4643a6a835527e8",
+      "rule_id": "typography.body.size",
+      "severity": "error",
+      "location": {"node_id": "body-p-0002", "node_type": "paragraph", "source": {"part": "word/document.xml", "path": "/w:document/w:body/w:p[2]", "index": 1, "page": 1}},
+      "message": "Body text size differs from profile",
+      "before": 10.5,
+      "after": 12,
+      "data": [{"name": "expected_pt", "value": 12}, {"name": "actual_pt", "value": 10.5}]
+    }
+  ],
+  "summary": {"error": 1, "warning": 1, "info": 0}
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0.0",
+  "privacy_report_id": "edf9855bd4304545",
+  "source_document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "matches": [
+    {
+      "match_id": "5e69b25bff5dc650",
+      "category": "email",
+      "location": {"node_id": "body-p-0003", "node_type": "paragraph", "source": {"part": "word/document.xml", "path": "/w:document/w:body/w:p[3]", "index": 2, "page": 1}},
+      "match_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "replacement": "[REDACTED:EMAIL]"
+    },
+    {
+      "match_id": "1289eabeb806f4f0",
+      "category": "student-id",
+      "location": {"node_id": "body-p-0004", "node_type": "paragraph", "source": {"part": "word/document.xml", "path": "/w:document/w:body/w:p[4]", "index": 3, "page": 1}},
+      "match_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "replacement": "[REDACTED:STUDENT-ID]"
+    }
+  ],
+  "summary": {"email": 1, "student-id": 1}
+}

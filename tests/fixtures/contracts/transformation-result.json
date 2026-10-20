@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0.0",
+  "transformation_id": "c55ab321d52aa21b",
+  "source_document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "output_document_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "profile_id": "apple-university-thesis",
+  "changes": [
+    {
+      "change_id": "f7e21df2102c0d36",
+      "operation": "set-paragraph-alignment",
+      "location": {"node_id": "body-p-0001", "node_type": "paragraph", "source": {"part": "word/document.xml", "path": "/w:document/w:body/w:p[1]", "index": 0, "page": 1}},
+      "before": "left",
+      "after": "justified",
+      "data": [{"name": "profile_rule", "value": "paragraph.alignment"}]
+    },
+    {
+      "change_id": "49538ff3edeef75d",
+      "operation": "set-font-size",
+      "location": {"node_id": "body-p-0002", "node_type": "paragraph", "source": {"part": "word/document.xml", "path": "/w:document/w:body/w:p[2]", "index": 1, "page": 1}},
+      "before": 10.5,
+      "after": 12,
+      "data": [{"name": "profile_rule", "value": "typography.body.size"}]
+    }
+  ],
+  "post_audit": {
+    "schema_version": "1.0.0",
+    "audit_id": "f2ca67fda5ae0238",
+    "document_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "profile_id": "apple-university-thesis",
+    "findings": [],
+    "summary": {"error": 0, "warning": 0, "info": 0}
+  },
+  "content_comparison": {
+    "before_snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "after_snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "equivalent": true,
+    "differences": []
+  }
+}

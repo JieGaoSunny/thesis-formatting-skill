@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thesis-format.example/schemas/v1/privacy-report.schema.json",
+  "title": "Privacy redaction report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "privacy_report_id", "source_document_sha256", "matches", "summary"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "privacy_report_id": {"$ref": "#/$defs/stableId"},
+    "source_document_sha256": {"$ref": "#/$defs/sha256"},
+    "matches": {"type": "array", "items": {"$ref": "#/$defs/match"}},
+    "summary": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0},
+      "propertyNames": {"pattern": "^[a-z][a-z0-9-]*$"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "stableId": {"type": "string", "pattern": "^[0-9a-f]{16}(?:[0-9a-f]{4}){0,12}$"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["part", "path", "index", "page"],
+      "properties": {
+        "part": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "index": {"type": "integer", "minimum": 0},
+        "page": {"type": ["integer", "null"], "minimum": 1}
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "node_type", "source"],
+      "properties": {
+        "node_id": {"type": "string", "minLength": 1},
+        "node_type": {"type": "string", "minLength": 1},
+        "source": {"$ref": "#/$defs/source"}
+      }
+    },
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["match_id", "category", "location", "match_hash", "replacement"],
+      "properties": {
+        "match_id": {"$ref": "#/$defs/stableId"},
+        "category": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+        "location": {"$ref": "#/$defs/location"},
+        "match_hash": {"$ref": "#/$defs/sha256"},
+        "replacement": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

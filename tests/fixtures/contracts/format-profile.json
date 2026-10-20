@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0.0",
+  "profile_id": "apple-university-thesis",
+  "name": "Apple University Thesis",
+  "locale": "zh-CN",
+  "page": {
+    "width_mm": 210,
+    "height_mm": 297,
+    "orientation": "portrait",
+    "margins_mm": {"top": 25.4, "right": 25.4, "bottom": 25.4, "left": 31.8},
+    "gutter_mm": 0
+  },
+  "typography": {
+    "body": {"font_family": "Noto Serif CJK SC", "size_pt": 12, "bold": false, "italic": false, "line_spacing": 1.5, "space_before_pt": 0, "space_after_pt": 0},
+    "heading_1": {"font_family": "Noto Sans CJK SC", "size_pt": 16, "bold": true, "italic": false, "line_spacing": 1.0, "space_before_pt": 12, "space_after_pt": 6},
+    "heading_2": {"font_family": "Noto Sans CJK SC", "size_pt": 14, "bold": true, "italic": false, "line_spacing": 1.0, "space_before_pt": 9, "space_after_pt": 4},
+    "caption": {"font_family": "Noto Serif CJK SC", "size_pt": 10.5, "bold": false, "italic": false, "line_spacing": 1.0, "space_before_pt": 3, "space_after_pt": 3},
+    "footnote": {"font_family": "Noto Serif CJK SC", "size_pt": 9, "bold": false, "italic": false, "line_spacing": 1.0, "space_before_pt": 0, "space_after_pt": 0}
+  },
+  "paragraph": {
+    "alignment": "justified",
+    "first_line_indent_chars": 2,
+    "keep_with_next": false,
+    "keep_lines_together": false,
+    "widow_control": true
+  },
+  "sections": {
+    "title_page": {"start_on": "new-page", "page_number_style": "none"},
+    "abstract": {"start_on": "new-page", "page_number_style": "roman-lower"},
+    "table_of_contents": {"start_on": "new-page", "page_number_style": "roman-lower"},
+    "body": {"start_on": "new-page", "page_number_style": "arabic"},
+    "references": {"start_on": "new-page", "page_number_style": "arabic"},
+    "appendices": {"start_on": "new-page", "page_number_style": "arabic"}
+  },
+  "numbering": {
+    "headings": "decimal",
+    "figures": "chapter-decimal",
+    "tables": "chapter-decimal",
+    "equations": "chapter-decimal",
+    "page_start": 1
+  },
+  "headers_footers": {
+    "different_first_page": true,
+    "different_odd_even": false,
+    "header_distance_mm": 12.7,
+    "footer_distance_mm": 12.7,
+    "header_text": "{chapter_title}",
+    "footer_text": "{page_number}"
+  },
+  "tables": {"alignment": "center", "cell_padding_mm": 1.5, "repeat_header_row": true, "allow_row_break": false},
+  "figures": {"alignment": "center", "max_width_percent": 100, "caption_position": "below"},
+  "references": {"style": "gb-t-7714", "hanging_indent_chars": 2, "sort": "citation-order"},
+  "role_detection": {
+    "style_names": {
+      "title": ["Title", "论文题目"],
+      "heading_1": ["Heading 1", "标题 1"],
+      "heading_2": ["Heading 2", "标题 2"],
+      "caption": ["Caption", "题注"],
+      "body": ["Normal", "正文"]
+    },
+    "text_patterns": [
+      {"role": "heading_1", "pattern": "^第[一二三四五六七八九十]+章", "flags": ["unicode"], "priority": 100},
+      {"role": "caption", "pattern": "^(图|表)\\s*\\d+", "flags": ["unicode"], "priority": 80}
+    ],
+    "position_constraints": [
+      {"role": "title", "section": "title_page", "min_index": 0, "max_index": 10, "first_page_only": true},
+      {"role": "heading_1", "section": "body", "min_index": 0, "max_index": null, "first_page_only": false}
+    ]
+  }
+}

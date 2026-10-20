@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0.0",
+  "snapshot_id": "46901ce724adf6e7",
+  "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "body": [
+    {"node_id": "body-p-0001", "node_type": "paragraph", "source_location": {"part": "word/document.xml", "path": "/w:document/w:body/w:p[1]", "index": 0}, "normalized_text": "第一章 绪论", "relationship_hash": null},
+    {"node_id": "body-p-0002", "node_type": "paragraph", "source_location": {"part": "word/document.xml", "path": "/w:document/w:body/w:p[2]", "index": 1}, "normalized_text": "这是正文。", "relationship_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+  ],
+  "headers": [
+    {"node_id": "header-1-p-0001", "node_type": "header", "source_location": {"part": "word/header1.xml", "path": "/w:hdr/w:p[1]", "index": 0}, "normalized_text": "第一章 绪论"}
+  ],
+  "footers": [
+    {"node_id": "footer-1-p-0001", "node_type": "footer", "source_location": {"part": "word/footer1.xml", "path": "/w:ftr/w:p[1]", "index": 0}, "normalized_text": "1"}
+  ]
+}

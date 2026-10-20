@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thesis-format.example/schemas/v1/format-profile.schema.json",
+  "title": "Thesis format profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "profile_id", "name", "locale", "page", "typography", "paragraph", "sections", "numbering", "headers_footers", "tables", "figures", "references", "role_detection"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "profile_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "name": {"type": "string", "minLength": 1},
+    "locale": {"type": "string", "pattern": "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$"},
+    "page": {"$ref": "#/$defs/page"},
+    "typography": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body", "heading_1", "heading_2", "caption", "footnote"],
+      "properties": {
+        "body": {"$ref": "#/$defs/textStyle"},
+        "heading_1": {"$ref": "#/$defs/textStyle"},
+        "heading_2": {"$ref": "#/$defs/textStyle"},
+        "caption": {"$ref": "#/$defs/textStyle"},
+        "footnote": {"$ref": "#/$defs/textStyle"}
+      }
+    },
+    "paragraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alignment", "first_line_indent_chars", "keep_with_next", "keep_lines_together", "widow_control"],
+      "properties": {
+        "alignment": {"enum": ["left", "center", "right", "justified", "distributed"]},
+        "first_line_indent_chars": {"type": "number", "minimum": 0},
+        "keep_with_next": {"type": "boolean"},
+        "keep_lines_together": {"type": "boolean"},
+        "widow_control": {"type": "boolean"}
+      }
+    },
+    "sections": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title_page", "abstract", "table_of_contents", "body", "references", "appendices"],
+      "properties": {
+        "title_page": {"$ref": "#/$defs/section"},
+        "abstract": {"$ref": "#/$defs/section"},
+        "table_of_contents": {"$ref": "#/$defs/section"},
+        "body": {"$ref": "#/$defs/section"},
+        "references": {"$ref": "#/$defs/section"},
+        "appendices": {"$ref": "#/$defs/section"}
+      }
+    },
+    "numbering": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["headings", "figures", "tables", "equations", "page_start"],
+      "properties": {
+        "headings": {"enum": ["none", "decimal", "chinese"]},
+        "figures": {"enum": ["decimal", "chapter-decimal"]},
+        "tables": {"enum": ["decimal", "chapter-decimal"]},
+        "equations": {"enum": ["decimal", "chapter-decimal"]},
+        "page_start": {"type": "integer", "minimum": 0}
+      }
+    },
+    "headers_footers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["different_first_page", "different_odd_even", "header_distance_mm", "footer_distance_mm", "header_text", "footer_text"],
+      "properties": {
+        "different_first_page": {"type": "boolean"},
+        "different_odd_even": {"type": "boolean"},
+        "header_distance_mm": {"type": "number", "minimum": 0},
+        "footer_distance_mm": {"type": "number", "minimum": 0},
+        "header_text": {"type": "string"},
+        "footer_text": {"type": "string"}
+      }
+    },
+    "tables": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alignment", "cell_padding_mm", "repeat_header_row", "allow_row_break"],
+      "properties": {
+        "alignment": {"enum": ["left", "center", "right"]},
+        "cell_padding_mm": {"type": "number", "minimum": 0},
+        "repeat_header_row": {"type": "boolean"},
+        "allow_row_break": {"type": "boolean"}
+      }
+    },
+    "figures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alignment", "max_width_percent", "caption_position"],
+      "properties": {
+        "alignment": {"enum": ["left", "center", "right"]},
+        "max_width_percent": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+        "caption_position": {"enum": ["above", "below"]}
+      }
+    },
+    "references": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["style", "hanging_indent_chars", "sort"],
+      "properties": {
+        "style": {"type": "string", "minLength": 1},
+        "hanging_indent_chars": {"type": "number", "minimum": 0},
+        "sort": {"enum": ["citation-order", "author", "title"]}
+      }
+    },
+    "role_detection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["style_names", "text_patterns", "position_constraints"],
+      "properties": {
+        "style_names": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["title", "heading_1", "heading_2", "caption", "body"],
+          "properties": {
+            "title": {"$ref": "#/$defs/nonEmptyStrings"},
+            "heading_1": {"$ref": "#/$defs/nonEmptyStrings"},
+            "heading_2": {"$ref": "#/$defs/nonEmptyStrings"},
+            "caption": {"$ref": "#/$defs/nonEmptyStrings"},
+            "body": {"$ref": "#/$defs/nonEmptyStrings"}
+          }
+        },
+        "text_patterns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role", "pattern", "flags", "priority"],
+            "properties": {
+              "role": {"type": "string", "minLength": 1},
+              "pattern": {"type": "string", "minLength": 1},
+              "flags": {"type": "array", "items": {"enum": ["ascii", "ignore-case", "multiline", "unicode"]}, "uniqueItems": true},
+              "priority": {"type": "integer"}
+            }
+          }
+        },
+        "position_constraints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role", "section", "min_index", "max_index", "first_page_only"],
+            "properties": {
+              "role": {"type": "string", "minLength": 1},
+              "section": {"enum": ["title_page", "abstract", "table_of_contents", "body", "references", "appendices"]},
+              "min_index": {"type": "integer", "minimum": 0},
+              "max_index": {"type": ["integer", "null"], "minimum": 0},
+              "first_page_only": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width_mm", "height_mm", "orientation", "margins_mm", "gutter_mm"],
+      "properties": {
+        "width_mm": {"type": "number", "exclusiveMinimum": 0},
+        "height_mm": {"type": "number", "exclusiveMinimum": 0},
+        "orientation": {"enum": ["portrait", "landscape"]},
+        "margins_mm": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["top", "right", "bottom", "left"],
+          "properties": {
+            "top": {"type": "number", "minimum": 0},
+            "right": {"type": "number", "minimum": 0},
+            "bottom": {"type": "number", "minimum": 0},
+            "left": {"type": "number", "minimum": 0}
+          }
+        },
+        "gutter_mm": {"type": "number", "minimum": 0}
+      }
+    },
+    "textStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["font_family", "size_pt", "bold", "italic", "line_spacing", "space_before_pt", "space_after_pt"],
+      "properties": {
+        "font_family": {"type": "string", "minLength": 1},
+        "size_pt": {"type": "number", "exclusiveMinimum": 0},
+        "bold": {"type": "boolean"},
+        "italic": {"type": "boolean"},
+        "line_spacing": {"type": "number", "exclusiveMinimum": 0},
+        "space_before_pt": {"type": "number", "minimum": 0},
+        "space_after_pt": {"type": "number", "minimum": 0}
+      }
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start_on", "page_number_style"],
+      "properties": {
+        "start_on": {"enum": ["continuous", "new-page", "odd-page", "even-page"]},
+        "page_number_style": {"enum": ["none", "arabic", "roman-lower", "roman-upper"]}
+      }
+    },
+    "nonEmptyStrings": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+  }
+}
