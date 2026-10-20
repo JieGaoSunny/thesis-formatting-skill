@@ -11,7 +11,15 @@
     "local_detected_version": "LibreOffice 26.8.1.1 bf6ef2662401c7d6dce671ab4deb26ee0af3a7c1"
   },
   "render_mode": "canonical",
-  "canonical_container_status": "published-pinned",
+  "canonical_container_status": "pending-rebuild",
+  "canonical_source_commit": "PENDING_REBUILD",
+  "canonical_build_inputs": {
+    "debian_snapshot": "20250203T000000Z",
+    "font_queries": [
+      "Liberation Serif",
+      "Noto Serif CJK SC"
+    ]
+  },
   "canonical_image_reference": "ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba",
   "canonical_image_digest": "sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba",
   "locale": "zh_CN.UTF-8",
@@ -25,5 +33,5 @@
     "locale_observed": "C.UTF-8",
     "verified_at": "2026-10-21T02:39:47+08:00"
   },
-  "release_ci_instructions": "Run ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba with THESIS_RENDER_IMAGE_DIGEST=sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba. For explicit noncanonical local development, set THESIS_RENDER_MODE=local."
+  "release_ci_instructions": "PENDING REBUILD: run the publish workflow, then replace canonical_source_commit, canonical_image_reference, and canonical_image_digest together. Until then canonical mode must fail. For explicit noncanonical local development, set THESIS_RENDER_MODE=local. Previous image: ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba."
 }

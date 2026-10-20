@@ -30,10 +30,15 @@ from thesis_format.contracts import (
 DEFAULT_DPI = 144
 DEFAULT_TIMEOUT_SECONDS = 120
 _IMAGE_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_SOURCE_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _NUMERIC_SELECTOR = re.compile(r"^-?\d+$")
 _RENDER_MODES = frozenset({"canonical", "local"})
 _IMAGE_DIGEST_ENV = "THESIS_RENDER_IMAGE_DIGEST"
 _RENDER_MODE_ENV = "THESIS_RENDER_MODE"
+_CANONICAL_MARKER = Path(
+    "/usr/local/share/thesis-format/canonical-container.json"
+)
 
 
 class RenderError(RuntimeError):
@@ -62,6 +67,143 @@ def _sha256_file(path: Path) -> str:
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _canonical_marker_path() -> Path:
+    return _CANONICAL_MARKER
+
+
+def _font_input_fingerprint(observations: Sequence[Mapping[str, str]]) -> str:
+    return _sha256_bytes(canonical_json(list(observations)).encode("utf-8"))
+
+
+def _observe_font_inputs(environment: Mapping[str, Any]) -> list[dict[str, str]]:
+    build_inputs = environment.get("canonical_build_inputs")
+    if not isinstance(build_inputs, Mapping):
+        raise CanonicalEnvironmentError(
+            "render environment is missing canonical build inputs"
+        )
+    queries = build_inputs.get("font_queries")
+    if (
+        not isinstance(queries, list)
+        or not queries
+        or any(not isinstance(query, str) or not query for query in queries)
+    ):
+        raise CanonicalEnvironmentError(
+            "canonical build inputs require nonempty font queries"
+        )
+    observations: list[dict[str, str]] = []
+    for query in queries:
+        try:
+            completed = subprocess.run(
+                [
+                    "fc-match",
+                    query,
+                    "--format=%{family}\t%{style}\t%{file}\n",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=float(
+                    environment.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
+                ),
+            )
+        except (
+            OSError,
+            subprocess.TimeoutExpired,
+            subprocess.CalledProcessError,
+        ) as error:
+            raise CanonicalEnvironmentError(
+                f"could not observe canonical font input: {query}"
+            ) from error
+        fields = completed.stdout.rstrip("\n").split("\t")
+        if len(fields) != 3 or any(not field for field in fields):
+            raise CanonicalEnvironmentError(
+                f"invalid canonical font observation: {query}"
+            )
+        observations.append(
+            {
+                "query": query,
+                "family": fields[0],
+                "style": fields[1],
+                "file": fields[2],
+            }
+        )
+    return observations
+
+
+def _validate_canonical_container(
+    environment: Mapping[str, Any], detected_version: str
+) -> None:
+    source_commit = environment.get("canonical_source_commit")
+    if not isinstance(source_commit, str) or not _SOURCE_COMMIT.fullmatch(
+        source_commit
+    ):
+        raise CanonicalEnvironmentError(
+            "canonical_source_commit is pending or is not 40 lowercase hex characters"
+        )
+    build_inputs = environment.get("canonical_build_inputs")
+    if not isinstance(build_inputs, Mapping):
+        raise CanonicalEnvironmentError(
+            "render environment is missing canonical build inputs"
+        )
+    debian_snapshot = build_inputs.get("debian_snapshot")
+    if not isinstance(debian_snapshot, str) or not debian_snapshot:
+        raise CanonicalEnvironmentError(
+            "canonical build inputs are missing the Debian snapshot"
+        )
+    expected_snapshot = environment["renderer"]["expected_source_snapshot"]
+    if expected_snapshot != f"debian-bookworm@{debian_snapshot}":
+        raise CanonicalEnvironmentError(
+            "canonical Debian snapshot conflicts with renderer source snapshot"
+        )
+
+    marker_path = _canonical_marker_path()
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise CanonicalEnvironmentError(
+            f"canonical rendering requires the trusted container marker: {marker_path}"
+        ) from error
+    if not isinstance(marker, Mapping) or marker.get("schema_version") != "1.0":
+        raise CanonicalEnvironmentError("invalid canonical container marker")
+
+    marker_commit = marker.get("source_commit")
+    if (
+        not isinstance(marker_commit, str)
+        or not _SOURCE_COMMIT.fullmatch(marker_commit)
+        or marker_commit != source_commit
+    ):
+        raise CanonicalEnvironmentError(
+            "canonical container source commit does not match render environment"
+        )
+    if marker.get("debian_snapshot") != debian_snapshot:
+        raise CanonicalEnvironmentError(
+            "canonical container Debian snapshot does not match render environment"
+        )
+
+    version_hash = marker.get("soffice_version_sha256")
+    if (
+        not isinstance(version_hash, str)
+        or not _HEX_SHA256.fullmatch(version_hash)
+        or version_hash
+        != _sha256_bytes(detected_version.encode("utf-8"))
+    ):
+        raise CanonicalEnvironmentError(
+            "canonical container LibreOffice version does not match runtime"
+        )
+    font_fingerprint = marker.get("font_input_fingerprint")
+    observed_fingerprint = _font_input_fingerprint(
+        _observe_font_inputs(environment)
+    )
+    if (
+        not isinstance(font_fingerprint, str)
+        or not _HEX_SHA256.fullmatch(font_fingerprint)
+        or font_fingerprint != observed_fingerprint
+    ):
+        raise CanonicalEnvironmentError(
+            "canonical container font input does not match runtime"
+        )
 
 
 def _load_environment(
@@ -364,6 +506,8 @@ def inspect_pdf(
         document.close()
 
     detected_version = _detect_soffice_version(selected_environment)
+    if selected_environment["render_mode"] == "canonical":
+        _validate_canonical_container(selected_environment, detected_version)
     page_dimensions = {
         "width_pt": dimensions[0][0],
         "height_pt": dimensions[0][1],

@@ -2,6 +2,8 @@
 FROM python:3.12.11-slim-bookworm@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7
 
 ARG DEBIAN_SNAPSHOT=20250203T000000Z
+ARG FONT_INPUTS_JSON='["Liberation Serif","Noto Serif CJK SC"]'
+ARG SOURCE_COMMIT
 ARG UV_VERSION=0.6.17
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -36,6 +38,86 @@ RUN rm -f /etc/apt/sources.list.d/debian.sources \
     && soffice --version | tee /usr/local/share/thesis-format/soffice-version.txt \
     && test -s /usr/local/share/thesis-format/soffice-version.txt \
     && rm -rf /var/lib/apt/lists/*
+
+RUN <<'EOF'
+set -eu
+case "${SOURCE_COMMIT}" in
+  *[!0-9a-fA-F]*|'') echo "SOURCE_COMMIT must be exactly 40 hexadecimal characters" >&2; exit 1 ;;
+esac
+test "${#SOURCE_COMMIT}" -eq 40 || {
+  echo "SOURCE_COMMIT must be exactly 40 hexadecimal characters" >&2
+  exit 1
+}
+export SOURCE_COMMIT DEBIAN_SNAPSHOT FONT_INPUTS_JSON
+python - <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import subprocess
+
+queries = json.loads(os.environ["FONT_INPUTS_JSON"])
+if not isinstance(queries, list) or not queries or not all(
+    isinstance(query, str) and query for query in queries
+):
+    raise SystemExit("FONT_INPUTS_JSON must be a nonempty JSON string array")
+
+observations = []
+for query in queries:
+    output = subprocess.check_output(
+        [
+            "fc-match",
+            query,
+            "--format=%{family}\t%{style}\t%{file}\n",
+        ],
+        text=True,
+    ).rstrip("\n")
+    fields = output.split("\t")
+    if len(fields) != 3 or not all(fields):
+        raise SystemExit(f"invalid font observation for {query!r}")
+    observations.append(
+        {
+            "query": query,
+            "family": fields[0],
+            "style": fields[1],
+            "file": fields[2],
+        }
+    )
+
+version = pathlib.Path(
+    "/usr/local/share/thesis-format/soffice-version.txt"
+).read_text(encoding="utf-8").strip()
+font_payload = (
+    json.dumps(
+        observations,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    + "\n"
+)
+marker = {
+    "schema_version": "1.0",
+    "source_commit": os.environ["SOURCE_COMMIT"].lower(),
+    "debian_snapshot": os.environ["DEBIAN_SNAPSHOT"],
+    "soffice_version_sha256": hashlib.sha256(
+        version.encode("utf-8")
+    ).hexdigest(),
+    "font_input_fingerprint": hashlib.sha256(
+        font_payload.encode("utf-8")
+    ).hexdigest(),
+}
+path = pathlib.Path(
+    "/usr/local/share/thesis-format/canonical-container.json"
+)
+path.write_text(
+    json.dumps(marker, separators=(",", ":"), sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+chown root:root /usr/local/share/thesis-format/canonical-container.json
+chmod 0444 /usr/local/share/thesis-format/canonical-container.json
+EOF
 
 WORKDIR /app
 

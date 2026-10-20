@@ -13,7 +13,10 @@ Figure generation requires a verified CJK font: pass `font_path`, set
 
 ## Renderer identity
 
-Canonical container exports require the immutable registry digest at runtime:
+Canonical publication is pending an image rebuild. The checked-in environment
+uses `canonical_source_commit: "PENDING_REBUILD"`, so canonical mode
+intentionally fails until the workflow-built image commit and digest are
+repinned together. The previous invocation was:
 
 ```bash
 docker run --rm \
@@ -22,11 +25,13 @@ docker run --rm \
   ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba ...
 ```
 
-`render-environment.json` records repository, Debian snapshot, locale, and font
-inputs together with this exact published reference and digest. CI and
-container invocations must use the same pinned values. The file is deliberately
-excluded from the Docker build context so an image digest can never become an
-input to its own image build.
+Canonical mode verifies the fixed, root-owned
+`/usr/local/share/thesis-format/canonical-container.json` marker against the
+configured source commit and build inputs, the exact pinned image digest, and
+runtime LibreOffice/font observations. Supplying only
+`THESIS_RENDER_IMAGE_DIGEST` outside that image cannot make a local render
+canonical. `render-environment.json` remains excluded from the Docker build
+context so an image digest can never become an input to its own image build.
 
 Local development must be explicitly enabled with
 `THESIS_RENDER_MODE=local` or `"render_mode": "local"` in a supplied render

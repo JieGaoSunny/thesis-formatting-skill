@@ -43,10 +43,13 @@ Exit codes: `0` success, `1` compliance findings or unresolved validation, `2` i
 These commands require installed renderer and privacy tooling. An unavailable renderer blocks compliance because export and preview validation cannot complete; unavailable privacy tooling blocks release.
 
 Canonical container export also requires a valid immutable registry digest in
-`THESIS_RENDER_IMAGE_DIGEST`. Use `THESIS_RENDER_MODE=local` only for explicit
-local development; its manifest is marked noncanonical and cannot satisfy
-canonical acceptance. The export command rejects noncanonical manifests by
-default. `--allow-noncanonical` is a development-only escape hatch and
+`THESIS_RENDER_IMAGE_DIGEST` plus the fixed root-owned canonical container
+marker. The marker is checked against configured source/build inputs and
+runtime LibreOffice/font observations; a spoofed digest on a local host is
+never canonical. Use `THESIS_RENDER_MODE=local` only for explicit local
+development; its manifest is marked noncanonical and cannot satisfy canonical
+acceptance. The export command rejects noncanonical manifests by default.
+`--allow-noncanonical` is a development-only escape hatch and
 **must not** be used for compliance evidence, publication, or any public artifact.
 Preview warns when its manifest is noncanonical.
 

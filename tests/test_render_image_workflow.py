@@ -41,6 +41,7 @@ def test_render_image_workflow_publishes_digest_reference() -> None:
         "platforms": "linux/amd64",
         "push": "true",
         "tags": f"{IMAGE}:sha-${{{{ github.sha }}}}",
+        "build-args": "SOURCE_COMMIT=${{ github.sha }}\n",
     }
 
     reference = steps[4]

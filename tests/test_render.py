@@ -35,6 +35,24 @@ CANONICAL_IMAGE_REFERENCE = (
     "ghcr.io/jiegaosunny/thesis-formatting-skill-render@"
     f"{CANONICAL_IMAGE_DIGEST}"
 )
+CANONICAL_SOURCE_COMMIT = "a" * 40
+DEBIAN_SNAPSHOT = "20250203T000000Z"
+FONT_QUERIES = ["Liberation Serif", "Noto Serif CJK SC"]
+SOFFICE_VERSION = "LibreOffice 24.2.7.2 actual-build"
+FONT_OBSERVATIONS = [
+    {
+        "query": "Liberation Serif",
+        "family": "Liberation Serif",
+        "style": "Regular",
+        "file": "/usr/share/fonts/truetype/liberation2/LiberationSerif-Regular.ttf",
+    },
+    {
+        "query": "Noto Serif CJK SC",
+        "family": "Noto Serif CJK SC",
+        "style": "Regular",
+        "file": "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+    },
+]
 
 
 def _sha256(path: Path) -> str:
@@ -83,6 +101,11 @@ def _environment(*, image_digest: str | None = "sha256:" + "a" * 64) -> dict:
         "timeout_seconds": 60,
         "canonical_image_digest": CANONICAL_IMAGE_DIGEST,
         "canonical_image_reference": CANONICAL_IMAGE_REFERENCE,
+        "canonical_source_commit": CANONICAL_SOURCE_COMMIT,
+        "canonical_build_inputs": {
+            "debian_snapshot": DEBIAN_SNAPSHOT,
+            "font_queries": FONT_QUERIES,
+        },
     }
 
 
@@ -91,14 +114,38 @@ def detected_version(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         render,
         "_detect_soffice_version",
-        lambda _environment: "LibreOffice 24.2.7.2 actual-build",
+        lambda _environment: SOFFICE_VERSION,
     )
 
 
 @pytest.fixture(autouse=True)
-def canonical_runtime_digest(monkeypatch: pytest.MonkeyPatch) -> None:
+def canonical_runtime_attestation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    marker = tmp_path / "canonical-container.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "source_commit": CANONICAL_SOURCE_COMMIT,
+                "debian_snapshot": DEBIAN_SNAPSHOT,
+                "soffice_version_sha256": hashlib.sha256(
+                    SOFFICE_VERSION.encode("utf-8")
+                ).hexdigest(),
+                "font_input_fingerprint": hashlib.sha256(
+                    render.canonical_json(FONT_OBSERVATIONS).encode("utf-8")
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("THESIS_RENDER_IMAGE_DIGEST", CANONICAL_IMAGE_DIGEST)
     monkeypatch.delenv("THESIS_RENDER_MODE", raising=False)
+    monkeypatch.setattr(render, "_canonical_marker_path", lambda: marker)
+    monkeypatch.setattr(
+        render, "_observe_font_inputs", lambda _environment: FONT_OBSERVATIONS
+    )
+    return marker
 
 
 def test_inspect_pdf_produces_valid_manifest_and_matches_baseline(
@@ -179,6 +226,72 @@ def test_canonical_image_digest_must_match_pinned_environment_digest(
     }
 
 
+def test_spoofed_digest_without_container_marker_is_noncanonical(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    detected_version: None,
+) -> None:
+    pdf = tmp_path / "demo.pdf"
+    _make_pdf(pdf)
+    monkeypatch.setattr(
+        render, "_canonical_marker_path", lambda: tmp_path / "missing-marker.json"
+    )
+
+    with pytest.raises(CanonicalEnvironmentError, match="container marker"):
+        inspect_pdf(pdf, _environment())
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("source_commit", "b" * 40, "source commit"),
+        ("debian_snapshot", "20250101T000000Z", "Debian snapshot"),
+        ("soffice_version_sha256", "0" * 64, "LibreOffice version"),
+        ("font_input_fingerprint", "0" * 64, "font input"),
+    ],
+)
+def test_canonical_container_marker_rejects_tampering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    detected_version: None,
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    pdf = tmp_path / "demo.pdf"
+    _make_pdf(pdf)
+    marker_path = render._canonical_marker_path()
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker[field] = value
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+
+    with pytest.raises(CanonicalEnvironmentError, match=message):
+        inspect_pdf(pdf, _environment())
+
+
+def test_runtime_font_observation_must_match_container_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    detected_version: None,
+) -> None:
+    pdf = tmp_path / "demo.pdf"
+    _make_pdf(pdf)
+    monkeypatch.setattr(
+        render,
+        "_observe_font_inputs",
+        lambda _environment: [
+            {
+                **FONT_OBSERVATIONS[0],
+                "file": "/unexpected/LiberationSerif-Regular.ttf",
+            },
+            FONT_OBSERVATIONS[1],
+        ],
+    )
+
+    with pytest.raises(CanonicalEnvironmentError, match="font input"):
+        inspect_pdf(pdf, _environment())
+
+
 def test_explicit_local_mode_records_noncanonical_renderer_fingerprint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -189,6 +302,9 @@ def test_explicit_local_mode_records_noncanonical_renderer_fingerprint(
     environment = _environment(image_digest=None)
     environment["render_mode"] = "local"
     monkeypatch.delenv("THESIS_RENDER_IMAGE_DIGEST", raising=False)
+    monkeypatch.setattr(
+        render, "_canonical_marker_path", lambda: tmp_path / "missing-marker.json"
+    )
 
     first = inspect_pdf(pdf, environment)
     second = inspect_pdf(pdf, environment)
@@ -225,7 +341,7 @@ def test_cli_export_fails_canonical_acceptance_while_digest_is_pending(
     assert not (tmp_path / "output.pdf").exists()
 
 
-def test_render_environment_and_docs_pin_published_image() -> None:
+def test_render_environment_marks_rebuild_pending_and_defines_attestation() -> None:
     environment = json.loads(
         (ROOT / "render-environment.json").read_text(encoding="utf-8")
     )
@@ -241,9 +357,14 @@ def test_render_environment_and_docs_pin_published_image() -> None:
     assert environment["renderer"]["local_detected_version"].startswith(
         "LibreOffice "
     )
-    assert environment["canonical_container_status"] == "published-pinned"
+    assert environment["canonical_container_status"] == "pending-rebuild"
     assert environment["canonical_image_digest"] == CANONICAL_IMAGE_DIGEST
     assert environment["canonical_image_reference"] == CANONICAL_IMAGE_REFERENCE
+    assert environment["canonical_source_commit"] == "PENDING_REBUILD"
+    assert environment["canonical_build_inputs"] == {
+        "debian_snapshot": DEBIAN_SNAPSHOT,
+        "font_queries": FONT_QUERIES,
+    }
     assert CANONICAL_IMAGE_REFERENCE in environment["release_ci_instructions"]
     assert f"THESIS_RENDER_IMAGE_DIGEST={CANONICAL_IMAGE_DIGEST}" in readme
     assert CANONICAL_IMAGE_REFERENCE in readme
@@ -260,11 +381,22 @@ def test_render_environment_and_docs_pin_published_image() -> None:
     assert "rm -f /etc/apt/sources.list.d/debian.sources" in dockerfile
     assert "soffice --version | tee" in dockerfile
     assert "test -s /usr/local/share/thesis-format/soffice-version.txt" in dockerfile
+    assert "ARG SOURCE_COMMIT" in dockerfile
+    assert "canonical-container.json" in dockerfile
+    assert "source_commit" in dockerfile
+    assert "soffice_version_sha256" in dockerfile
+    assert "font_input_fingerprint" in dockerfile
+    assert "chown root:root" in dockerfile
+    assert "chmod 0444" in dockerfile
     assert "COPY render-environment.json" not in dockerfile
     assert "THESIS_RENDER_IMAGE_DIGEST" not in dockerfile
     assert "render-environment.json" in (
         ROOT / ".dockerignore"
     ).read_text(encoding="utf-8").splitlines()
+    workflow = (
+        ROOT / ".github" / "workflows" / "render-image.yml"
+    ).read_text(encoding="utf-8")
+    assert "SOURCE_COMMIT=${{ github.sha }}" in workflow
 
 
 def test_detect_soffice_version_records_command_output(
@@ -471,6 +603,7 @@ def _fake_soffice_conversion(
 def test_export_document_failure_leaves_no_outputs_and_can_retry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    canonical_runtime_attestation: Path,
     failure: str,
 ) -> None:
     source = tmp_path / "input.docx"
@@ -482,6 +615,14 @@ def test_export_document_failure_leaves_no_outputs_and_can_retry(
         render,
         "_detect_soffice_version",
         lambda _environment: "LibreOffice 24.2.7.2 actual-build",
+    )
+    monkeypatch.setattr(
+        render,
+        "_canonical_marker_path",
+        lambda: canonical_runtime_attestation,
+    )
+    monkeypatch.setattr(
+        render, "_observe_font_inputs", lambda _environment: FONT_OBSERVATIONS
     )
     real_inspect = render.inspect_pdf
 
@@ -519,6 +660,14 @@ def test_export_document_failure_leaves_no_outputs_and_can_retry(
             render,
             "_detect_soffice_version",
             lambda _environment: "LibreOffice 24.2.7.2 actual-build",
+        )
+        monkeypatch.setattr(
+            render,
+            "_canonical_marker_path",
+            lambda: canonical_runtime_attestation,
+        )
+        monkeypatch.setattr(
+            render, "_observe_font_inputs", lambda _environment: FONT_OBSERVATIONS
         )
 
     assert export_document(source, output, manifest_path, _environment()) == [

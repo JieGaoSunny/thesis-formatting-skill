@@ -33,6 +33,8 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ghcr.io/jiegaosunny/thesis-formatting-skill-render:sha-${{ github.sha }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
 
       - name: Write canonical image reference
         shell: bash

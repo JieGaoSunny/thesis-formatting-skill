@@ -10,7 +10,9 @@
 
 ## 渲染器身份
 
-规范容器导出必须在运行时传入不可变镜像摘要：
+规范镜像目前等待重建。仓库中的环境配置将
+`canonical_source_commit` 设为 `"PENDING_REBUILD"`，因此在工作流构建新镜像并同时
+更新提交与摘要之前，规范模式会按设计失败。此前的调用方式为：
 
 ```bash
 docker run --rm \
@@ -19,7 +21,12 @@ docker run --rm \
   ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba ...
 ```
 
-`render-environment.json` 记录仓库、Debian 快照、区域设置、字体输入及上述精确发布引用和摘要。CI 与容器调用必须使用相同的固定值。该文件被明确排除在 Docker 构建上下文之外，避免镜像摘要成为自身构建输入。
+规范模式会校验固定且由 root 拥有的
+`/usr/local/share/thesis-format/canonical-container.json` 标记，确认源码提交、
+构建输入、精确固定的镜像摘要以及运行时 LibreOffice/字体观测全部一致。仅在本地
+伪造 `THESIS_RENDER_IMAGE_DIGEST` 不能产生规范渲染。
+`render-environment.json` 仍被排除在 Docker 构建上下文之外，避免镜像摘要成为
+自身构建输入。
 
 本地开发必须通过 `THESIS_RENDER_MODE=local` 或渲染环境中的
 `"render_mode": "local"` 显式启用。本地清单会在
