@@ -859,6 +859,59 @@ def test_three_line_table_rejects_table_inside_horizontal_borders(
     ) is expected_violation
 
 
+def test_three_line_table_accepts_inside_horizontal_for_exactly_two_rows(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "two-row-table-inside-horizontal.docx",
+        [{"text": "表", "field": "SEQ Table \\s 1", "style": "AppleTableCaption"}],
+        add_table=True,
+    )
+    root = _xml(path, "word/document.xml")
+    table = root.find(".//w:tbl", namespaces=NS)
+    assert table is not None
+    first_row = table.find("w:tr", namespaces=NS)
+    assert first_row is not None
+    table.append(deepcopy(first_row))
+    tbl_pr = table.find("w:tblPr", namespaces=NS)
+    assert tbl_pr is not None
+    borders = etree.SubElement(tbl_pr, f"{W}tblBorders")
+    for name in ("top", "insideH", "bottom"):
+        etree.SubElement(borders, f"{W}{name}", {f"{W}val": "single"})
+    _replace_part(path, "word/document.xml", root)
+
+    assert "TABLE.BORDERS.THREE_LINE" not in _rule_ids(path)
+
+
+def test_three_line_table_rejects_duplicate_two_row_header_separators(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "two-row-table-duplicate-header-separators.docx",
+        [{"text": "表", "field": "SEQ Table \\s 1", "style": "AppleTableCaption"}],
+        add_table=True,
+    )
+    root = _xml(path, "word/document.xml")
+    table = root.find(".//w:tbl", namespaces=NS)
+    assert table is not None
+    first_row = table.find("w:tr", namespaces=NS)
+    assert first_row is not None
+    table.append(deepcopy(first_row))
+    tbl_pr = table.find("w:tblPr", namespaces=NS)
+    assert tbl_pr is not None
+    borders = etree.SubElement(tbl_pr, f"{W}tblBorders")
+    for name in ("top", "insideH", "bottom"):
+        etree.SubElement(borders, f"{W}{name}", {f"{W}val": "single"})
+    for cell in first_row.findall("w:tc", namespaces=NS):
+        tc_pr = cell.find("w:tcPr", namespaces=NS)
+        assert tc_pr is not None
+        tc_borders = etree.SubElement(tc_pr, f"{W}tcBorders")
+        etree.SubElement(tc_borders, f"{W}bottom", {f"{W}val": "single"})
+    _replace_part(path, "word/document.xml", root)
+
+    assert "TABLE.BORDERS.THREE_LINE" in _rule_ids(path)
+
+
 @pytest.mark.parametrize(
     ("row_index", "border_name", "border_value", "expected_violation"),
     [

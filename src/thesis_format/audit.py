@@ -1167,12 +1167,13 @@ class TableRule:
                     "none",
                 }
 
+            rows = table.findall("w:tr", namespaces=NS)
             header_cells = (
                 first_row.findall("w:tc", namespaces=NS)
                 if first_row is not None
                 else ()
             )
-            has_header_bottom = (
+            has_cell_header_bottom = (
                 bool(header_cells)
                 and all(
                     visible_border(
@@ -1181,20 +1182,33 @@ class TableRule:
                     for cell in header_cells
                 )
             )
+            has_table_header_bottom = (
+                len(rows) == 2
+                and borders is not None
+                and visible_border(borders.find("w:insideH", namespaces=NS))
+            )
+            has_header_bottom = (
+                has_cell_header_bottom or has_table_header_bottom
+            )
             has_extra_table_border = borders is not None and any(
                 visible_border(border)
-                and etree.QName(border).localname not in {"top", "bottom"}
+                and not (
+                    etree.QName(border).localname in {"top", "bottom"}
+                    or (
+                        etree.QName(border).localname == "insideH"
+                        and has_table_header_bottom
+                    )
+                )
                 for border in borders
             )
             has_extra_cell_border = any(
                 visible_border(border)
                 and not (
-                    row_index == 0
+                    not has_table_header_bottom
+                    and row_index == 0
                     and etree.QName(border).localname == "bottom"
                 )
-                for row_index, row in enumerate(
-                    table.findall("w:tr", namespaces=NS)
-                )
+                for row_index, row in enumerate(rows)
                 for cell in row.findall("w:tc", namespaces=NS)
                 for border in cell.findall(
                     "w:tcPr/w:tcBorders/*",
