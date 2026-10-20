@@ -1,0 +1,686 @@
+profile:
+  id: apple-university-thesis
+  display_name: Apple University Thesis
+  schema_version: '1.0'
+metadata:
+  description: Fictional Apple University thesis formatting profile for public demonstration.
+  notes:
+  - All institution and identity values are fictional.
+  - Every formatting value is explicit; no application defaults are assumed.
+page:
+  paper:
+    width_mm: 210
+    height_mm: 297
+  body:
+    top_mm: 30
+    bottom_mm: 30
+    left_mm: 30
+    right_mm: 30
+  header_distance_mm: 22
+  footer_distance_mm: 22
+  section_start:
+    body: next_page
+    major_back_matter: next_page
+styles:
+  title_zh:
+    paragraph:
+      alignment: center
+      line_spacing:
+        type: multiple
+        value: 1.25
+      space_before_pt: 0
+      space_after_pt: 0
+      first_line_chars: 0
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: true
+      page_break_before: false
+    run:
+      font_zh: Noto Sans CJK SC
+      font_latin: Liberation Sans
+      size_pt: 26
+      bold: true
+      italic: false
+    word_styles:
+    - AppleTitleZH
+    - 苹果大学中文题名
+  title_en:
+    paragraph:
+      alignment: center
+      line_spacing:
+        type: multiple
+        value: 1.25
+      space_before_pt: 0
+      space_after_pt: 0
+      first_line_chars: 0
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: true
+      page_break_before: false
+    run:
+      font_zh: Noto Sans CJK SC
+      font_latin: Liberation Sans
+      size_pt: 22
+      bold: true
+      italic: false
+    word_styles:
+    - AppleTitleEN
+    - 苹果大学英文题名
+  front_heading:
+    paragraph:
+      alignment: center
+      line_spacing:
+        type: multiple
+        value: 1
+      space_before_pt: 24
+      space_after_pt: 18
+      first_line_chars: 0
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: true
+      page_break_before: false
+    run:
+      font_zh: Noto Sans CJK SC
+      font_latin: Liberation Sans
+      size_pt: 16
+      bold: true
+      italic: false
+    word_styles:
+    - AppleFrontHeading
+    - 苹果大学前置标题
+  heading_1:
+    paragraph:
+      alignment: center
+      line_spacing:
+        type: multiple
+        value: 1
+      space_before_pt: 24
+      space_after_pt: 18
+      first_line_chars: 0
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: true
+      page_break_before: true
+    run:
+      font_zh: Noto Sans CJK SC
+      font_latin: Liberation Sans
+      size_pt: 16
+      bold: true
+      italic: false
+    word_styles:
+    - AppleHeading1
+    - 苹果大学标题1
+  heading_2:
+    paragraph:
+      alignment: left
+      line_spacing:
+        type: exact
+        value_pt: 20
+      space_before_pt: 24
+      space_after_pt: 6
+      first_line_chars: 0
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: true
+      page_break_before: false
+    run:
+      font_zh: Noto Sans CJK SC
+      font_latin: Liberation Sans
+      size_pt: 14
+      bold: true
+      italic: false
+    word_styles:
+    - AppleHeading2
+    - 苹果大学标题2
+  heading_3:
+    paragraph:
+      alignment: left
+      line_spacing:
+        type: exact
+        value_pt: 20
+      space_before_pt: 12
+      space_after_pt: 6
+      first_line_chars: 0
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: true
+      page_break_before: false
+    run:
+      font_zh: Noto Sans CJK SC
+      font_latin: Liberation Sans
+      size_pt: 13
+      bold: true
+      italic: false
+    word_styles:
+    - AppleHeading3
+    - 苹果大学标题3
+  body:
+    paragraph:
+      alignment: justify
+      line_spacing:
+        type: exact
+        value_pt: 20
+      space_before_pt: 0
+      space_after_pt: 0
+      first_line_chars: 2
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: false
+      page_break_before: false
+    run:
+      font_zh: Noto Serif CJK SC
+      font_latin: Liberation Serif
+      size_pt: 12
+      bold: false
+      italic: false
+    word_styles:
+    - AppleBody
+    - 苹果大学正文
+  abstract_zh:
+    paragraph:
+      alignment: justify
+      line_spacing:
+        type: exact
+        value_pt: 20
+      space_before_pt: 0
+      space_after_pt: 0
+      first_line_chars: 2
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: false
+      page_break_before: false
+    run:
+      font_zh: Noto Serif CJK SC
+      font_latin: Liberation Serif
+      size_pt: 12
+      bold: false
+      italic: false
+    word_styles:
+    - AppleAbstractZH
+    - 苹果大学中文摘要
+  abstract_en:
+    paragraph:
+      alignment: justify
+      line_spacing:
+        type: exact
+        value_pt: 20
+      space_before_pt: 0
+      space_after_pt: 0
+      first_line_chars: 0
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: false
+      page_break_before: false
+    run:
+      font_zh: Noto Serif CJK SC
+      font_latin: Liberation Serif
+      size_pt: 12
+      bold: false
+      italic: false
+    word_styles:
+    - AppleAbstractEN
+    - 苹果大学英文摘要
+  keywords:
+    paragraph:
+      alignment: left
+      line_spacing:
+        type: exact
+        value_pt: 20
+      space_before_pt: 0
+      space_after_pt: 0
+      first_line_chars: 0
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: false
+      page_break_before: false
+    run:
+      font_zh: Noto Serif CJK SC
+      font_latin: Liberation Serif
+      size_pt: 12
+      bold: false
+      italic: false
+    word_styles:
+    - AppleKeywords
+    - 苹果大学关键词
+  figure_caption:
+    paragraph:
+      alignment: center
+      line_spacing:
+        type: multiple
+        value: 1
+      space_before_pt: 6
+      space_after_pt: 12
+      first_line_chars: 0
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: false
+      page_break_before: false
+    run:
+      font_zh: Noto Serif CJK SC
+      font_latin: Liberation Serif
+      size_pt: 11
+      bold: false
+      italic: false
+    word_styles:
+    - AppleFigureCaption
+    - 苹果大学图题
+  table_caption:
+    paragraph:
+      alignment: center
+      line_spacing:
+        type: multiple
+        value: 1
+      space_before_pt: 12
+      space_after_pt: 6
+      first_line_chars: 0
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: true
+      page_break_before: false
+    run:
+      font_zh: Noto Serif CJK SC
+      font_latin: Liberation Serif
+      size_pt: 11
+      bold: false
+      italic: false
+    word_styles:
+    - AppleTableCaption
+    - 苹果大学表题
+  source_note:
+    paragraph:
+      alignment: left
+      line_spacing:
+        type: multiple
+        value: 1
+      space_before_pt: 6
+      space_after_pt: 12
+      first_line_chars: 0
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: false
+      page_break_before: false
+    run:
+      font_zh: Noto Serif CJK SC
+      font_latin: Liberation Serif
+      size_pt: 10.5
+      bold: false
+      italic: false
+    word_styles:
+    - AppleSourceNote
+    - 苹果大学资料来源
+  table_body:
+    paragraph:
+      alignment: left
+      line_spacing:
+        type: multiple
+        value: 1
+      space_before_pt: 0
+      space_after_pt: 0
+      first_line_chars: 0
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: false
+      page_break_before: false
+    run:
+      font_zh: Noto Serif CJK SC
+      font_latin: Liberation Serif
+      size_pt: 11
+      bold: false
+      italic: false
+    word_styles:
+    - AppleTableBody
+    - 苹果大学表格正文
+  reference:
+    paragraph:
+      alignment: left
+      line_spacing:
+        type: exact
+        value_pt: 16
+      space_before_pt: 0
+      space_after_pt: 0
+      first_line_chars: 0
+      left_indent_mm: 0
+      hanging_indent_mm: 10
+      keep_with_next: false
+      page_break_before: false
+    run:
+      font_zh: Noto Serif CJK SC
+      font_latin: Liberation Serif
+      size_pt: 10.5
+      bold: false
+      italic: false
+    word_styles:
+    - AppleReference
+    - 苹果大学参考文献
+  appendix_heading:
+    paragraph:
+      alignment: center
+      line_spacing:
+        type: multiple
+        value: 1
+      space_before_pt: 24
+      space_after_pt: 18
+      first_line_chars: 0
+      left_indent_mm: 0
+      hanging_indent_mm: 0
+      keep_with_next: true
+      page_break_before: true
+    run:
+      font_zh: Noto Sans CJK SC
+      font_latin: Liberation Sans
+      size_pt: 16
+      bold: true
+      italic: false
+    word_styles:
+    - AppleAppendixHeading
+    - 苹果大学附录标题
+role_detection:
+  text_patterns:
+    title_zh: []
+    title_en: []
+    front_heading:
+    - pattern: ^(目录|图目录|表目录|缩略语表|参考文献|致谢)$
+      flags:
+      - unicode
+      priority: 100
+    heading_1:
+    - pattern: ^第[一二三四五六七八九十]+章\s+.+$
+      flags:
+      - unicode
+      priority: 100
+    heading_2:
+    - pattern: ^\d+\.\d+\s+.+$
+      flags:
+      - unicode
+      priority: 90
+    heading_3:
+    - pattern: ^\d+\.\d+\.\d+\s+.+$
+      flags:
+      - unicode
+      priority: 95
+    body: []
+    abstract_zh:
+    - pattern: ^摘\s*要$
+      flags:
+      - unicode
+      priority: 100
+    abstract_en:
+    - pattern: ^ABSTRACT$
+      flags:
+      - ignore_case
+      - unicode
+      priority: 100
+    keywords:
+    - pattern: ^(关键词|Keywords)\s*[:：].*$
+      flags:
+      - ignore_case
+      - unicode
+      priority: 100
+    figure_caption:
+    - pattern: ^图\s*\d+[.-]\d+\s+.+$
+      flags:
+      - unicode
+      priority: 100
+    table_caption:
+    - pattern: ^表\s*\d+[.-]\d+\s+.+$
+      flags:
+      - unicode
+      priority: 100
+    source_note:
+    - pattern: ^资料来源[:：].*$
+      flags:
+      - unicode
+      priority: 100
+    table_body: []
+    reference:
+    - pattern: ^\[\d+\]\s+.+$
+      flags:
+      - unicode
+      priority: 100
+    appendix_heading:
+    - pattern: ^附录\s+[A-Z]\s+.+$
+      flags:
+      - unicode
+      priority: 100
+  position_constraints:
+    title_zh:
+    - section: title_page
+      min_index: 0
+      max_index: 30
+      first_page_only: true
+    title_en:
+    - section: title_page
+      min_index: 0
+      max_index: 30
+      first_page_only: true
+    front_heading:
+    - section: front_matter
+      min_index: 0
+      max_index: null
+      first_page_only: false
+    heading_1:
+    - section: body
+      min_index: 0
+      max_index: null
+      first_page_only: false
+    heading_2:
+    - section: body
+      min_index: 0
+      max_index: null
+      first_page_only: false
+    heading_3:
+    - section: body
+      min_index: 0
+      max_index: null
+      first_page_only: false
+    body:
+    - section: body
+      min_index: 0
+      max_index: null
+      first_page_only: false
+    abstract_zh:
+    - section: front_matter
+      min_index: 0
+      max_index: null
+      first_page_only: false
+    abstract_en:
+    - section: front_matter
+      min_index: 0
+      max_index: null
+      first_page_only: false
+    keywords:
+    - section: front_matter
+      min_index: 0
+      max_index: null
+      first_page_only: false
+    figure_caption:
+    - section: any
+      min_index: 0
+      max_index: null
+      first_page_only: false
+    table_caption:
+    - section: any
+      min_index: 0
+      max_index: null
+      first_page_only: false
+    source_note:
+    - section: any
+      min_index: 0
+      max_index: null
+      first_page_only: false
+    table_body:
+    - section: any
+      min_index: 0
+      max_index: null
+      first_page_only: false
+    reference:
+    - section: references
+      min_index: 0
+      max_index: null
+      first_page_only: false
+    appendix_heading:
+    - section: appendix
+      min_index: 0
+      max_index: null
+      first_page_only: false
+numbering:
+  chapters:
+    format: chinese_chapter
+    separator: ' '
+    restart_scope: document
+  sections:
+    format: decimal
+    separator: .
+    restart_scope: chapter
+  appendices:
+    format: upper_alpha
+    separator: ' '
+    restart_scope: document
+  figures:
+    format: chapter_sequence
+    separator: '-'
+    restart_scope: chapter
+  tables:
+    format: chapter_sequence
+    separator: '-'
+    restart_scope: chapter
+front_matter:
+  parts:
+  - id: title_zh
+    heading_role: title_zh
+    required: true
+    starts_section: true
+    page_number_style: none
+    show_header: false
+  - id: title_en
+    heading_role: title_en
+    required: true
+    starts_section: false
+    page_number_style: none
+    show_header: false
+  - id: abstract_zh
+    heading_role: abstract_zh
+    required: true
+    starts_section: true
+    page_number_style: upper_roman
+    show_header: true
+  - id: abstract_en
+    heading_role: abstract_en
+    required: true
+    starts_section: true
+    page_number_style: upper_roman
+    show_header: true
+  - id: toc
+    heading_role: front_heading
+    required: true
+    starts_section: true
+    page_number_style: upper_roman
+    show_header: true
+  - id: list_of_figures
+    heading_role: front_heading
+    required: true
+    starts_section: true
+    page_number_style: upper_roman
+    show_header: true
+  - id: list_of_tables
+    heading_role: front_heading
+    required: true
+    starts_section: true
+    page_number_style: upper_roman
+    show_header: true
+  - id: abbreviations
+    heading_role: front_heading
+    required: true
+    starts_section: true
+    page_number_style: upper_roman
+    show_header: true
+fields:
+  toc:
+    required: true
+    field_code: TOC \o "1-3" \h \z \u
+    levels:
+      min: 1
+      max: 3
+  list_of_figures:
+    required: true
+    field_code: TOC \h \z \c "图"
+    levels: null
+  list_of_tables:
+    required: true
+    field_code: TOC \h \z \c "表"
+    levels: null
+  page_number:
+    front_start: 1
+    body_start: 1
+    alignment: center
+  cross_references:
+    require_existing_target: true
+    mark_dirty_on_write: true
+headers_footers:
+  front_matter:
+    header_enabled: true
+    header_source: current_front_heading
+    header_style_role: front_heading
+    page_number_enabled: true
+    page_number_style: upper_roman
+    page_number_alignment: center
+  body:
+    header_enabled: true
+    header_source: current_heading_1
+    header_style_role: heading_1
+    page_number_enabled: true
+    page_number_style: decimal
+    page_number_alignment: center
+  appendix:
+    header_enabled: true
+    header_source: current_appendix_heading
+    header_style_role: appendix_heading
+    page_number_enabled: true
+    page_number_style: decimal
+    page_number_alignment: center
+  section_linking:
+    link_body_headers: true
+    link_body_footers: true
+    link_appendix_headers: true
+    link_appendix_footers: true
+figures:
+  max_width_mm: 150
+  alignment: center
+  caption_position: below
+  caption_keep_with_object: true
+  source_note_required_for_non_original: true
+tables:
+  caption_position: above
+  repeat_header: true
+  allow_row_split: false
+  border_model: three_line
+  continued_table_policy: continued_label
+references:
+  citation_system: numeric
+  line_spacing_pt: 16
+  space_before_pt: 0
+  space_after_pt: 0
+  hanging_indent_mm: 10
+privacy:
+  fictional_values:
+    institution_zh: 苹果大学
+    institution_en: Apple University
+    author: 艾苹
+    student_id: APPLE-0001
+    adviser: 林果教授
+  forbidden_metadata_keys:
+  - creator
+  - lastModifiedBy
+  - company
+  - manager
+  generic_patterns:
+  - id: email
+    regex: \b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b
+    flags: iu
+  - id: student-id
+    regex: \b\d{8,14}\b
+    flags: u
+  unresolved_placeholder_patterns:
+  - \{\{[^{}]+\}\}
+  - \[[A-Z_]+\]
+  - TODO|TBD
