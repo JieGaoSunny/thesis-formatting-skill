@@ -414,7 +414,9 @@ def test_default_optional_tool_wrappers_lazy_import_and_dispatch(
     def preview_pdf(document: Path, output_directory: Path) -> list[Path]:
         calls.append(("preview", (document, output_directory)))
         output_directory.mkdir()
-        return []
+        image = output_directory / "page-1.png"
+        image.write_bytes(b"png")
+        return [image]
 
     render.export_document = export_document  # type: ignore[attr-defined]
     render.preview_pdf = preview_pdf  # type: ignore[attr-defined]
@@ -422,7 +424,11 @@ def test_default_optional_tool_wrappers_lazy_import_and_dispatch(
 
     def release_check(document: Path, profile_path: Path) -> dict[str, object]:
         calls.append(("privacy", (document, profile_path)))
-        return {"summary": {"errors": 0, "violations": 0}}
+        return json.loads(
+            (
+                ROOT / "tests" / "fixtures" / "contracts" / "privacy-report.json"
+            ).read_text(encoding="utf-8")
+        )
 
     privacy.release_check = release_check  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "thesis_format.render", render)
@@ -446,7 +452,7 @@ def test_default_optional_tool_wrappers_lazy_import_and_dispatch(
                 str(privacy_report),
             ]
         )
-        == 0
+        == 1
     )
 
     assert [name for name, _ in calls] == ["export", "preview", "privacy"]
@@ -476,11 +482,11 @@ def test_export_preview_and_release_check_use_injected_functions(
 
     def privacy(document: Path, profile_path: Path) -> dict[str, object]:
         calls.append(("privacy", (document, profile_path)))
-        return {
-            "schema_version": "1.0",
-            "summary": {"errors": 0, "violations": 1, "warnings": 0},
-            "findings": [],
-        }
+        return json.loads(
+            (
+                ROOT / "tests" / "fixtures" / "contracts" / "privacy-report.json"
+            ).read_text(encoding="utf-8")
+        )
 
     dependencies = cli.CliDependencies(
         export_document=export,
@@ -524,8 +530,247 @@ def test_export_preview_and_release_check_use_injected_functions(
     assert pdf.is_file()
     assert (preview_dir / "page-1.png").is_file()
     assert json.loads(privacy_report.read_text(encoding="utf-8"))["summary"][
-        "violations"
+        "errors"
     ] == 1
     stdout = capsys.readouterr().out
     for requested in (pdf, preview_dir, privacy_report):
         assert str(requested) in stdout
+
+
+@pytest.mark.parametrize("provider_result", ({}, None))
+def test_release_check_rejects_missing_or_malformed_provider_report(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    provider_result: object,
+) -> None:
+    source = tmp_path / "input.docx"
+    profile = tmp_path / "profile.yaml"
+    report = tmp_path / "privacy.json"
+    source.write_bytes(b"docx")
+    profile.write_text("unused", encoding="utf-8")
+
+    result = cli.main(
+        [
+            "release-check",
+            str(source),
+            "--profile",
+            str(profile),
+            "--report",
+            str(report),
+        ],
+        dependencies=cli.CliDependencies(
+            privacy_check=lambda _source, _profile: provider_result  # type: ignore[arg-type]
+        ),
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert not report.exists()
+    assert str(report) not in captured.out
+
+
+def test_release_check_rejects_semantically_invalid_provider_report(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "input.docx"
+    profile = tmp_path / "profile.yaml"
+    report = tmp_path / "privacy.json"
+    source.write_bytes(b"docx")
+    profile.write_text("unused", encoding="utf-8")
+    invalid_report = json.loads(
+        (ROOT / "tests" / "fixtures" / "contracts" / "privacy-report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    invalid_report["summary"]["errors"] = 0
+
+    result = cli.main(
+        [
+            "release-check",
+            str(source),
+            "--profile",
+            str(profile),
+            "--report",
+            str(report),
+        ],
+        dependencies=cli.CliDependencies(
+            privacy_check=lambda _source, _profile: invalid_report
+        ),
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert not report.exists()
+    assert str(report) not in captured.out
+
+
+@pytest.mark.parametrize(
+    "provider",
+    (
+        lambda _source, _output: None,
+        lambda _source, _output: {},
+        lambda _source, output: output,
+        lambda _source, output: output.write_bytes(b"") or output,
+    ),
+)
+def test_export_rejects_noop_or_empty_artifact_provider(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    provider: object,
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    source.write_bytes(b"docx")
+
+    result = cli.main(
+        ["export", str(source), "--output", str(output)],
+        dependencies=cli.CliDependencies(export_document=provider),  # type: ignore[arg-type]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert str(output) not in captured.out
+
+
+def test_export_rejects_invalid_returned_render_manifest(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+
+    def provider(_source: Path, requested_output: Path) -> list[Path]:
+        requested_output.write_bytes(b"pdf")
+        manifest.write_text("{}", encoding="utf-8")
+        return [requested_output, manifest]
+
+    result = cli.main(
+        ["export", str(source), "--output", str(output)],
+        dependencies=cli.CliDependencies(export_document=provider),
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert str(output) not in captured.out
+
+
+def test_export_accepts_valid_returned_render_manifest(tmp_path: Path) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+
+    def provider(_source: Path, requested_output: Path) -> list[Path]:
+        requested_output.write_bytes(b"pdf")
+        manifest.write_bytes(
+            (
+                ROOT / "tests" / "fixtures" / "contracts" / "render-manifest.json"
+            ).read_bytes()
+        )
+        return [requested_output, manifest]
+
+    result = cli.main(
+        ["export", str(source), "--output", str(output)],
+        dependencies=cli.CliDependencies(export_document=provider),
+    )
+
+    assert result == 0
+
+
+def test_export_rejects_missing_returned_render_manifest(tmp_path: Path) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "missing-render-manifest.json"
+    source.write_bytes(b"docx")
+
+    def provider(_source: Path, requested_output: Path) -> list[Path]:
+        requested_output.write_bytes(b"pdf")
+        return [requested_output, manifest]
+
+    result = cli.main(
+        ["export", str(source), "--output", str(output)],
+        dependencies=cli.CliDependencies(export_document=provider),
+    )
+
+    assert result == 2
+
+
+@pytest.mark.parametrize(
+    "provider",
+    (
+        lambda _source, _directory: None,
+        lambda _source, _directory: {},
+        lambda _source, directory: directory.mkdir() or [],
+        lambda _source, directory: [directory / "missing.png"],
+        lambda _source, directory: (
+            directory.mkdir(),
+            (directory / "page-1.png").write_bytes(b""),
+            [directory / "page-1.png"],
+        )[-1],
+    ),
+)
+def test_preview_rejects_noop_missing_or_empty_artifact_provider(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    provider: object,
+) -> None:
+    source = tmp_path / "input.docx"
+    output_directory = tmp_path / "preview"
+    source.write_bytes(b"docx")
+
+    result = cli.main(
+        ["preview", str(source), "--output-dir", str(output_directory)],
+        dependencies=cli.CliDependencies(preview_document=provider),  # type: ignore[arg-type]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert str(output_directory) not in captured.out
+
+
+def test_preview_accepts_nonempty_images_discovered_in_output_directory(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.docx"
+    output_directory = tmp_path / "preview"
+    source.write_bytes(b"docx")
+
+    def provider(_source: Path, directory: Path) -> None:
+        directory.mkdir()
+        (directory / "page-1.png").write_bytes(b"png")
+
+    result = cli.main(
+        ["preview", str(source), "--output-dir", str(output_directory)],
+        dependencies=cli.CliDependencies(preview_document=provider),
+    )
+
+    assert result == 0
+
+
+def test_preview_accepts_images_in_output_directory_with_returned_manifest(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.docx"
+    output_directory = tmp_path / "preview"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+
+    def provider(_source: Path, directory: Path) -> list[Path]:
+        directory.mkdir()
+        (directory / "page-1.png").write_bytes(b"png")
+        manifest.write_bytes(
+            (
+                ROOT / "tests" / "fixtures" / "contracts" / "render-manifest.json"
+            ).read_bytes()
+        )
+        return [manifest]
+
+    result = cli.main(
+        ["preview", str(source), "--output-dir", str(output_directory)],
+        dependencies=cli.CliDependencies(preview_document=provider),
+    )
+
+    assert result == 0

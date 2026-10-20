@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,7 +11,11 @@ from typing import Callable, Mapping, Sequence
 
 from thesis_format import __version__
 from thesis_format.audit import audit_document, render_audit_markdown
-from thesis_format.contracts import canonical_json
+from thesis_format.contracts import (
+    canonical_json,
+    validate_privacy_report,
+    validate_render_manifest,
+)
 from thesis_format.format import format_document
 from thesis_format.profile import load_profile
 
@@ -162,6 +167,45 @@ def _write_text(path: Path, content: str) -> None:
     print(path)
 
 
+def _provider_paths(result: object) -> tuple[Path, ...]:
+    if result is None:
+        return ()
+    if isinstance(result, Path):
+        return (result,)
+    if isinstance(result, (str, bytes, Mapping)) or not isinstance(
+        result, Sequence
+    ):
+        raise ValueError("provider returned invalid artifact paths")
+    paths: list[Path] = []
+    for item in result:
+        if not isinstance(item, (str, Path)):
+            raise ValueError("provider returned invalid artifact paths")
+        paths.append(Path(item))
+    return tuple(paths)
+
+
+def _require_nonempty_regular_file(path: Path, label: str) -> None:
+    try:
+        valid = path.is_file() and path.stat().st_size > 0
+    except OSError:
+        valid = False
+    if not valid:
+        raise ValueError(
+            f"{label} does not exist or is not a nonempty regular file: {path}"
+        )
+
+
+def _validate_returned_artifacts(paths: Sequence[Path]) -> None:
+    for path in paths:
+        _require_nonempty_regular_file(path, "provider artifact")
+        if path.suffix.lower() == ".json":
+            try:
+                manifest = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                raise ValueError(f"invalid render manifest: {path}") from error
+            validate_render_manifest(manifest)
+
+
 def _is_unresolved(report: Mapping[str, object]) -> bool:
     summary = report.get("summary")
     if not isinstance(summary, Mapping):
@@ -219,7 +263,11 @@ def _run_export(args: argparse.Namespace, function: ExportFunction | None) -> in
             "provides thesis_format.render.export_document"
         )
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    function(args.source, args.output)
+    returned_paths = _provider_paths(function(args.source, args.output))
+    _require_nonempty_regular_file(args.output, "PDF output")
+    _validate_returned_artifacts(
+        tuple(path for path in returned_paths if path != args.output)
+    )
     print(args.output)
     return 0
 
@@ -235,7 +283,35 @@ def _run_preview(args: argparse.Namespace, function: PreviewFunction | None) -> 
             "optional preview tooling is unavailable; install tooling that "
             "provides thesis_format.render.preview_pdf"
         )
-    function(args.source, args.output_directory)
+    returned_paths = _provider_paths(function(args.source, args.output_directory))
+    _validate_returned_artifacts(returned_paths)
+    image_suffixes = {
+        ".bmp",
+        ".gif",
+        ".jpeg",
+        ".jpg",
+        ".png",
+        ".tif",
+        ".tiff",
+        ".webp",
+    }
+    returned_images = [
+        path for path in returned_paths if path.suffix.lower() in image_suffixes
+    ]
+    if returned_images:
+        images = returned_images
+    elif args.output_directory.is_dir():
+        images = [
+            path
+            for path in args.output_directory.rglob("*")
+            if path.suffix.lower() in image_suffixes
+        ]
+    else:
+        images = []
+    if not images:
+        raise ValueError("preview provider produced no image artifacts")
+    for image in images:
+        _require_nonempty_regular_file(image, "preview image")
     print(args.output_directory)
     return 0
 
@@ -256,6 +332,7 @@ def _run_release_check(
             "provides thesis_format.privacy.release_check"
         )
     report = function(args.source, args.profile)
+    validate_privacy_report(report)
     _write_text(args.report, canonical_json(report))
     return 1 if _is_unresolved(report) else 0
 
