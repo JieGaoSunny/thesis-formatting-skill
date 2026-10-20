@@ -1159,6 +1159,7 @@ class TableRule:
                     0,
                 )
             borders = table.find("w:tblPr/w:tblBorders", namespaces=NS)
+
             def visible_border(element: etree._Element | None) -> bool:
                 return element is not None and _attr(element, "val") not in {
                     None,
@@ -1166,6 +1167,13 @@ class TableRule:
                     "none",
                 }
 
+            vertical_border_names = (
+                "left",
+                "right",
+                "start",
+                "end",
+                "insideV",
+            )
             header_cells = (
                 first_row.findall("w:tc", namespaces=NS)
                 if first_row is not None
@@ -1183,6 +1191,16 @@ class TableRule:
                     for cell in header_cells
                 )
             )
+            has_cell_vertical_border = any(
+                visible_border(
+                    cell.find(
+                        f"w:tcPr/w:tcBorders/w:{name}",
+                        namespaces=NS,
+                    )
+                )
+                for cell in table.findall(".//w:tc", namespaces=NS)
+                for name in vertical_border_names
+            )
             has_three_line = (
                 borders is not None
                 and visible_border(borders.find("w:top", namespaces=NS))
@@ -1190,14 +1208,9 @@ class TableRule:
                 and has_header_bottom
                 and not any(
                     visible_border(borders.find(f"w:{name}", namespaces=NS))
-                    for name in (
-                        "left",
-                        "right",
-                        "start",
-                        "end",
-                        "insideV",
-                    )
+                    for name in vertical_border_names
                 )
+                and not has_cell_vertical_border
             )
             if (
                 context.profile.tables.border_model == "three_line"
@@ -1564,7 +1577,9 @@ def _front_part_for_section(
 
 
 def _effective_story_targets(
-    context: AuditContext, kind: str
+    context: AuditContext,
+    kind: str,
+    reference_type: str = "default",
 ) -> tuple[str | None, ...]:
     relationship_by_id = {
         relationship.id: resolve_relationship_target(
@@ -1579,16 +1594,16 @@ def _effective_story_targets(
     targets: list[str | None] = []
     for section in context.section_elements:
         references = section.findall(f"w:{kind}Reference", namespaces=NS)
-        default_reference = next(
+        typed_reference = next(
             (
                 reference
                 for reference in references
-                if (_attr(reference, "type") or "default") == "default"
+                if (_attr(reference, "type") or "default") == reference_type
             ),
-            references[0] if references else None,
+            None,
         )
-        if default_reference is not None:
-            relationship_id = default_reference.get(
+        if typed_reference is not None:
+            relationship_id = typed_reference.get(
                 "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
             )
             current = relationship_by_id.get(relationship_id)

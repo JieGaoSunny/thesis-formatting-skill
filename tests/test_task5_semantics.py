@@ -767,6 +767,59 @@ def test_three_line_table_requires_visible_top_header_bottom_and_bottom(
     assert "TABLE.BORDERS.THREE_LINE" in _rule_ids(path)
 
 
+@pytest.mark.parametrize(
+    ("border_name", "border_value", "expected_violation"),
+    [
+        ("left", "single", True),
+        ("right", "single", True),
+        ("start", "single", True),
+        ("end", "single", True),
+        ("insideV", "single", True),
+        ("left", "nil", False),
+        ("right", "none", False),
+    ],
+)
+def test_three_line_table_rejects_visible_cell_vertical_borders(
+    tmp_path: Path,
+    border_name: str,
+    border_value: str,
+    expected_violation: bool,
+) -> None:
+    path = build_docx(
+        tmp_path / f"cell-border-{border_name}-{border_value}.docx",
+        [{"text": "表", "field": "SEQ Table \\s 1", "style": "AppleTableCaption"}],
+        add_table=True,
+    )
+    root = _xml(path, "word/document.xml")
+    table = root.find(".//w:tbl", namespaces=NS)
+    assert table is not None
+    tbl_pr = table.find("w:tblPr", namespaces=NS)
+    assert tbl_pr is not None
+    borders = etree.SubElement(tbl_pr, f"{W}tblBorders")
+    for name in ("top", "bottom"):
+        etree.SubElement(borders, f"{W}{name}", {f"{W}val": "single"})
+    first_row = table.find("w:tr", namespaces=NS)
+    assert first_row is not None
+    cells = first_row.findall("w:tc", namespaces=NS)
+    for cell in cells:
+        tc_pr = cell.find("w:tcPr", namespaces=NS)
+        assert tc_pr is not None
+        tc_borders = etree.SubElement(tc_pr, f"{W}tcBorders")
+        etree.SubElement(tc_borders, f"{W}bottom", {f"{W}val": "single"})
+    first_tc_borders = cells[0].find("w:tcPr/w:tcBorders", namespaces=NS)
+    assert first_tc_borders is not None
+    etree.SubElement(
+        first_tc_borders,
+        f"{W}{border_name}",
+        {f"{W}val": border_value},
+    )
+    _replace_part(path, "word/document.xml", root)
+
+    assert (
+        "TABLE.BORDERS.THREE_LINE" in _rule_ids(path)
+    ) is expected_violation
+
+
 @pytest.mark.parametrize("false_value", ["false", "0", "off", "no"])
 def test_table_boolean_values_follow_ooxml_on_off_semantics(
     tmp_path: Path,
@@ -992,6 +1045,32 @@ def test_header_linking_uses_targets_and_dynamic_sources_require_styleref(
     document.sections[1].header.paragraphs[0].text = "Different header"
     document.save(unlinked)
     assert "HEADER.FOOTER.LINKING" in _rule_ids(unlinked)
+
+
+@pytest.mark.parametrize("reference_type", ["first", "even"])
+def test_default_header_footer_audit_does_not_use_typed_story_references(
+    tmp_path: Path,
+    reference_type: str,
+) -> None:
+    path = build_docx(
+        tmp_path / f"{reference_type}-only-stories.docx",
+        [{"text": "第一章 正文", "style": "AppleHeading1"}],
+        add_header_footer=True,
+    )
+    root = _xml(path, "word/document.xml")
+    section = root.find(".//w:sectPr", namespaces=NS)
+    assert section is not None
+    header_reference = section.find("w:headerReference", namespaces=NS)
+    footer_reference = section.find("w:footerReference", namespaces=NS)
+    assert header_reference is not None
+    assert footer_reference is not None
+    header_reference.set(f"{W}type", reference_type)
+    footer_reference.set(f"{W}type", reference_type)
+    _replace_part(path, "word/document.xml", root)
+
+    rule_ids = _rule_ids(path)
+    assert "HEADER.FOOTER.HEADER_REQUIRED" in rule_ids
+    assert "HEADER.FOOTER.FOOTER_REQUIRED" in rule_ids
 
 
 def test_header_footer_nested_findings_use_part_paragraph_locations(
