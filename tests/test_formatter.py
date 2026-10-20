@@ -10,6 +10,7 @@ from docx import Document
 from docx.enum.style import WD_STYLE_TYPE
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import Inches
 from PIL import Image
 
 from thesis_format.audit import audit_document
@@ -498,6 +499,170 @@ def test_second_table_caption_uses_second_table_occurrence_hash(
     assert change["object_occurrence_sha256"] == table_hashes[1]
 
 
+def test_page_number_repair_preserves_footer_text_table_image_and_field(
+    tmp_path: Path,
+) -> None:
+    source = build_docx(
+        tmp_path / "footer-content.docx",
+        [{"text": "第一章 绪论", "style": "AppleHeading1"}],
+    )
+    image_path = tmp_path / "footer.png"
+    Image.new("RGB", (8, 8), "green").save(image_path)
+    document = Document(source)
+    footer = document.sections[0].footer
+    footer.paragraphs[0].text = "Confidential footer"
+    _append_test_field(footer.add_paragraph(), " DATE ")
+    footer.add_paragraph().add_run().add_picture(
+        str(image_path), width=Inches(0.1)
+    )
+    footer_table = footer.add_table(rows=1, cols=1, width=Inches(1))
+    footer_table.cell(0, 0).text = "Footer table"
+    document.save(source)
+
+    report = format_document(
+        source,
+        tmp_path / "formatted.docx",
+        PROFILE,
+        clock=lambda: NOW,
+    )
+
+    package = OoxmlPackage.open(tmp_path / "formatted.docx")
+    footer_part = next(iter(package.iter_part_names("word/footer")))
+    root = package.xml(footer_part)
+    assert root.xpath(
+        ".//w:p[.//w:t='Confidential footer']", namespaces=NS
+    )
+    assert root.xpath(".//w:tbl[.//w:t='Footer table']", namespaces=NS)
+    assert root.xpath(".//w:drawing", namespaces=NS)
+    assert root.xpath(
+        ".//w:instrText[contains(., 'DATE')]", namespaces=NS
+    )
+    page_paragraphs = root.xpath(
+        "./w:p[.//w:instrText[contains(., 'PAGE')]]", namespaces=NS
+    )
+    assert len(page_paragraphs) == 1
+    assert page_paragraphs[0].xpath(
+        "./w:pPr/w:jc[@w:val='center']", namespaces=NS
+    )
+    assert report["content_comparison"]["equivalent"] is True
+
+
+def test_page_number_exemption_does_not_hide_footer_content_loss(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = build_docx(
+        tmp_path / "footer-loss.docx",
+        [{"text": "第一章 绪论", "style": "AppleHeading1"}],
+    )
+    document = Document(source)
+    document.sections[0].footer.paragraphs[0].text = "Must survive"
+    document.save(source)
+
+    from thesis_format.format import headers
+
+    original = headers._write_footer
+
+    def destructive_footer(root, alignment):
+        original(root, alignment)
+        text = root.xpath(
+            "./w:p//w:t[.='Must survive']", namespaces=NS
+        )[0]
+        text.getparent().getparent().remove(text.getparent())
+
+    monkeypatch.setattr(headers, "_write_footer", destructive_footer)
+
+    report = format_document(
+        source,
+        tmp_path / "formatted.docx",
+        PROFILE,
+        clock=lambda: NOW,
+    )
+
+    assert report["content_comparison"]["equivalent"] is False
+    assert any(
+        difference["kind"] == "removed"
+        and difference["before"]["normalized_text"] == "Must survive"
+        for difference in report["content_comparison"]["differences"]
+    )
+
+
+def test_table_repairs_ignore_nested_tables_and_target_second_outer_table(
+    tmp_path: Path,
+) -> None:
+    source = build_docx(
+        tmp_path / "nested-tables.docx",
+        [{"text": "第一章 绪论", "style": "AppleHeading1"}],
+    )
+    document = Document(source)
+    if "AppleTableCaption" not in document.styles:
+        document.styles.add_style(
+            "AppleTableCaption", WD_STYLE_TYPE.PARAGRAPH
+        )
+    document.add_paragraph("表 1-1 First outer", style="AppleTableCaption")
+    first_outer = document.add_table(rows=1, cols=1)
+    first_outer.cell(0, 0).text = "Outer one"
+    nested = first_outer.cell(0, 0).add_table(rows=1, cols=1)
+    nested.cell(0, 0).text = "Nested sentinel"
+    document.add_paragraph("Between tables")
+    second_outer = document.add_table(rows=1, cols=1)
+    second_outer.cell(0, 0).text = "Outer two"
+    document.add_paragraph("表 1-2 Second outer", style="AppleTableCaption")
+    document.save(source)
+
+    report = format_document(
+        source,
+        tmp_path / "formatted.docx",
+        PROFILE,
+        clock=lambda: NOW,
+    )
+
+    package = OoxmlPackage.open(tmp_path / "formatted.docx")
+    body = package.xml("word/document.xml").find("w:body", namespaces=NS)
+    assert body is not None
+    outer_tables = body.findall("w:tbl", namespaces=NS)
+    assert len(outer_tables) == 2
+    assert outer_tables[1].xpath(
+        "./w:tr[1]/w:trPr/w:tblHeader", namespaces=NS
+    )
+    assert outer_tables[1].xpath(
+        "./w:tblPr/w:tblBorders/w:top", namespaces=NS
+    )
+    output_nested = outer_tables[0].xpath(
+        "./w:tr/w:tc/w:tbl", namespaces=NS
+    )[0]
+    assert not output_nested.xpath(
+        "./w:tr[1]/w:trPr/w:tblHeader", namespaces=NS
+    )
+    second_caption = outer_tables[1].getprevious()
+    assert second_caption is not None
+    assert "Second outer" in "".join(
+        second_caption.xpath(".//w:t/text()", namespaces=NS)
+    )
+    change = next(
+        change
+        for change in report["changes"]
+        if change["rule_id"] == "TABLE.CAPTION.POSITION"
+        and change["location"] == "table:2"
+    )
+    assert change["status"] == "applied"
+    assert not any(
+        str(change["location"]) == "table:3"
+        for change in report["changes"]
+    )
+    top_level_hashes = list(
+        dict.fromkeys(
+            str(node["relationship_hash"])
+            for node in extract_snapshot(source, PROFILE)["body"]
+            if node["node_type"] == "table"
+            and str(node["source_location"]["path"]).startswith(
+                "/w:document/w:body/w:tbl["
+            )
+        )
+    )
+    assert change["object_occurrence_sha256"] == top_level_hashes[1]
+
+
 def test_formatter_creates_missing_body_header_footer_package_parts(
     tmp_path: Path,
 ) -> None:
@@ -664,3 +829,20 @@ def _location_key(location: str) -> tuple[object, ...]:
     if kind == "part":
         return (order[kind], value)
     return (order[kind], int(value))
+
+
+def _append_test_field(paragraph, instruction: str) -> None:
+    run = paragraph.add_run()
+    for kind, text in (
+        ("begin", None),
+        (None, instruction),
+        ("separate", None),
+        ("end", None),
+    ):
+        if kind is not None:
+            node = OxmlElement("w:fldChar")
+            node.set(qn("w:fldCharType"), kind)
+        else:
+            node = OxmlElement("w:instrText")
+            node.text = text
+        run._r.append(node)

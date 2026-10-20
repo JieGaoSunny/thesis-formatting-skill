@@ -275,18 +275,11 @@ def _write_footer(root: etree._Element, alignment: str) -> None:
             jc = etree.SubElement(p_pr, f"{W}jc")
         jc.set(f"{W}val", alignment)
         return
-    placeholder = "".join(root.xpath(".//w:t/text()", namespaces=NS))
-    for child in list(root):
-        root.remove(child)
     paragraph = etree.SubElement(root, f"{W}p")
     p_pr = _set_paragraph_style(paragraph, None)
     jc = etree.SubElement(p_pr, f"{W}jc")
     jc.set(f"{W}val", alignment)
     _field(paragraph, "PAGE", "")
-    if placeholder and placeholder != "1":
-        run = etree.SubElement(paragraph, f"{W}r")
-        text = etree.SubElement(run, f"{W}t")
-        text.text = placeholder
 
 
 def repair_headers(

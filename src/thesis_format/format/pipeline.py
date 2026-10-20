@@ -130,6 +130,11 @@ def _caption_binding(
             node
             for node in before_snapshot["body"]  # type: ignore[index]
             if node["node_type"] == object_type
+            and re.match(
+                r"^/w:document/w:body/w:tbl\[\d+\]/w:tr\[",
+                str(node["source_location"]["path"]),
+            )
+            is not None
         ]
         distinct_tables: list[dict[str, object]] = []
         seen_hashes: set[str] = set()
@@ -239,7 +244,7 @@ def _allow_verified_header_footer_repairs(
     comparison: dict[str, object],
     changes: list[dict[str, object]],
 ) -> None:
-    allowed: set[tuple[int, str]] = set()
+    allowed: dict[tuple[int, str], set[str]] = {}
     for change in changes:
         if (
             change["status"] != "applied"
@@ -252,17 +257,13 @@ def _allow_verified_header_footer_repairs(
             "HEADER.FOOTER.HEADER_REQUIRED",
             "HEADER.FOOTER.HEADER_SOURCE",
         }:
-            allowed.add((section, "header"))
-        elif rule_id in {
-            "HEADER.FOOTER.FOOTER_REQUIRED",
-            "HEADER.FOOTER.PAGE_NUMBER",
-            "HEADER.FOOTER.PAGE_ALIGNMENT",
-        }:
-            allowed.add((section, "footer"))
+            allowed.setdefault((section, "header"), set()).add(rule_id)
         elif rule_id == "HEADER.FOOTER.LINKING":
             for kind in change["before"]:
                 if kind in {"header", "footer"}:
-                    allowed.add((section, str(kind)))
+                    allowed.setdefault(
+                        (section, str(kind)), set()
+                    ).add(rule_id)
     if not allowed:
         return
     differences = comparison["differences"]
@@ -289,13 +290,55 @@ def _allow_verified_header_footer_repairs(
             else None
         )
 
+    def node(value: object) -> dict[str, object] | None:
+        return value if isinstance(value, dict) else None
+
+    def rules_for(difference: dict[str, object]) -> set[str]:
+        result: set[str] = set()
+        for value in (difference.get("before"), difference.get("after")):
+            location = story_part(value)
+            if location is not None:
+                result.update(allowed.get(location, set()))
+        return result
+
+    def operation_allows(difference: dict[str, object]) -> bool:
+        rules = rules_for(difference)
+        before = node(difference.get("before"))
+        after = node(difference.get("after"))
+        if "HEADER.FOOTER.HEADER_SOURCE" in rules:
+            return (
+                difference["kind"] in {"changed", "removed"}
+                and before is not None
+                and before.get("node_type") == "header"
+                and (
+                    after is None
+                    or after.get("node_type") == "header"
+                )
+            )
+        if "HEADER.FOOTER.HEADER_REQUIRED" in rules:
+            return (
+                difference["kind"] == "added"
+                and after is not None
+                and after.get("node_type") == "header"
+            )
+        if "HEADER.FOOTER.LINKING" in rules:
+            return (
+                difference["kind"] in {"added", "removed", "changed"}
+                and (
+                    before is None
+                    or before.get("node_type") in {"header", "footer"}
+                )
+                and (
+                    after is None
+                    or after.get("node_type") in {"header", "footer"}
+                )
+            )
+        return False
+
     comparison["differences"] = [
         difference
         for difference in differences
-        if not (
-            story_part(difference.get("before")) in allowed
-            or story_part(difference.get("after")) in allowed
-        )
+        if not operation_allows(difference)
     ]
     comparison["equivalent"] = not comparison["differences"]
 

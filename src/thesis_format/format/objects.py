@@ -302,7 +302,11 @@ def repair_objects(
                 continue
             repaired.add(f"{rule_id}|{location}")
 
-    tables = document.xpath(".//w:body//w:tbl", namespaces=NS)
+    tables = [
+        block.element
+        for block in blocks
+        if block.kind == "table"
+    ]
     for finding in findings:
         rule_id = str(finding["rule_id"])
         location = str(finding["location"])
