@@ -207,6 +207,7 @@ def _candidate(
     relationship_hash: str | None = None,
     *,
     note_id: str | None = None,
+    note_type: str | None = None,
     table_geometry: dict[str, object] | None = None,
     character_offset: int | None = None,
     same_offset_ordinal: int | None = None,
@@ -225,6 +226,8 @@ def _candidate(
     }
     if note_id is not None:
         candidate["note_id"] = note_id
+    if note_type is not None:
+        candidate["note_type"] = note_type
     if table_geometry is not None:
         candidate["table_geometry"] = table_geometry
     return candidate
@@ -250,6 +253,8 @@ def _images(
     object_identities: _ObjectIdentities,
     *,
     exclude_nested_tables: bool = False,
+    note_id: str | None = None,
+    note_type: str | None = None,
 ) -> list[dict[str, object]]:
     relationships = _relationship_map(package.relationships(), part)
     result: list[dict[str, object]] = []
@@ -292,8 +297,10 @@ def _images(
                 normalize_text(alt),
                 part,
                 f"{base_path}/w:drawing[{drawing_index}]",
-                source_index,
+                source_index + len(result),
                 relationship_hash,
+                note_id=note_id,
+                note_type=note_type,
             )
         )
     return result
@@ -306,6 +313,8 @@ def _equations(
     source_index: int,
     *,
     exclude_nested_tables: bool = False,
+    note_id: str | None = None,
+    note_type: str | None = None,
 ) -> list[dict[str, object]]:
     equations = [
         equation
@@ -325,6 +334,8 @@ def _equations(
                 part,
                 f"{base_path}/m:equation[{equation_index}]",
                 source_index + len(result),
+                note_id=note_id,
+                note_type=note_type,
             )
         )
     return result
@@ -388,6 +399,7 @@ def _note_references(
                 f"{base_path}/w:{local}[{counts[kind]}]",
                 source_index + len(result),
                 note_id=note_id,
+                note_type=kind,
                 character_offset=character_offset,
                 same_offset_ordinal=offset_counts[offset_key],
             )
@@ -483,6 +495,9 @@ def _append_table_nodes(
     part: str,
     table_path: str,
     story: str,
+    index_offset: int = 0,
+    note_id: str | None = None,
+    note_type: str | None = None,
 ) -> None:
     cells, table_signature = _table_cells(table, profile)
     table_identity = object_identities.identity(
@@ -502,8 +517,10 @@ def _append_table_nodes(
                 text,
                 part,
                 cell_path,
-                len(result),
+                index_offset + len(result),
                 table_identity,
+                note_id=note_id,
+                note_type=note_type,
                 table_geometry=geometry,
             )
         )
@@ -512,7 +529,7 @@ def _append_table_nodes(
                 cell,
                 part,
                 cell_path,
-                len(result),
+                index_offset + len(result),
                 profile,
                 exclude_nested_tables=True,
             )
@@ -523,10 +540,12 @@ def _append_table_nodes(
                 package,
                 part,
                 cell_path,
-                len(result),
+                index_offset + len(result),
                 story,
                 object_identities,
                 exclude_nested_tables=True,
+                note_id=note_id,
+                note_type=note_type,
             )
         )
         result.extend(
@@ -534,8 +553,10 @@ def _append_table_nodes(
                 cell,
                 part,
                 cell_path,
-                len(result),
+                index_offset + len(result),
                 exclude_nested_tables=True,
+                note_id=note_id,
+                note_type=note_type,
             )
         )
         for nested_index, nested_table in enumerate(
@@ -550,6 +571,9 @@ def _append_table_nodes(
                 part=part,
                 table_path=f"{cell_path}/w:tbl[{nested_index}]",
                 story=story,
+                index_offset=index_offset,
+                note_id=note_id,
+                note_type=note_type,
             )
 
 
@@ -635,6 +659,7 @@ def _note_nodes(
     profile: FormatProfile,
     kind: str,
     source_index: int,
+    object_identities: _ObjectIdentities,
 ) -> list[dict[str, object]]:
     part = f"word/{kind}s.xml"
     if part not in package.parts:
@@ -657,27 +682,66 @@ def _note_nodes(
                 continue
         except ValueError:
             pass
-        text = normalize_text(
-            " ".join(
-                _clean_paragraph(paragraph, profile)
-                for paragraph in note.xpath(".//w:p", namespaces=NS)
-            )
-        )
         base_path = f"/w:{kind}s/w:{kind}[@w:id='{note_id}']"
-        if text:
-            result.append(
-                _candidate(
-                    kind,
-                    text,
-                    part,
-                    base_path,
-                    source_index + len(result),
-                    note_id=note_id,
+        story = f"{kind}:{note_id}"
+        paragraph_number = 0
+        table_number = 0
+        for child in note:
+            local = etree.QName(child).localname
+            if local == "p":
+                paragraph_number += 1
+                paragraph_path = f"{base_path}/w:p[{paragraph_number}]"
+                text = _clean_paragraph(child, profile)
+                if text:
+                    result.append(
+                        _candidate(
+                            kind,
+                            text,
+                            part,
+                            paragraph_path,
+                            source_index + len(result),
+                            note_id=note_id,
+                            note_type=kind,
+                        )
+                    )
+                result.extend(
+                    _images(
+                        child,
+                        package,
+                        part,
+                        paragraph_path,
+                        source_index + len(result),
+                        story,
+                        object_identities,
+                        note_id=note_id,
+                        note_type=kind,
+                    )
                 )
-            )
-        result.extend(
-            _equations(note, part, base_path, source_index + len(result))
-        )
+                result.extend(
+                    _equations(
+                        child,
+                        part,
+                        paragraph_path,
+                        source_index + len(result),
+                        note_id=note_id,
+                        note_type=kind,
+                    )
+                )
+            elif local == "tbl":
+                table_number += 1
+                _append_table_nodes(
+                    result,
+                    child,
+                    package,
+                    profile,
+                    object_identities,
+                    part=part,
+                    table_path=f"{base_path}/w:tbl[{table_number}]",
+                    story=story,
+                    index_offset=source_index,
+                    note_id=note_id,
+                    note_type=kind,
+                )
     return result
 
 
@@ -781,7 +845,7 @@ def assign_node_ids(
 
 
 def _assign_ids(collections: list[list[dict[str, object]]]) -> None:
-    counts: Counter[tuple[str, str, str, str]] = Counter()
+    counts: Counter[tuple[str, str, str, str, str]] = Counter()
     payloads: list[list[object]] = []
     nodes = [node for collection in collections for node in collection]
     for node in nodes:
@@ -790,6 +854,7 @@ def _assign_ids(collections: list[list[dict[str, object]]]) -> None:
             str(node["normalized_text"]),
             str(node.get("relationship_hash") or ""),
             str(node.get("note_id") or ""),
+            str(node.get("note_type") or ""),
         )
         ordinal = counts[key]
         counts[key] += 1
@@ -800,6 +865,7 @@ def _assign_ids(collections: list[list[dict[str, object]]]) -> None:
                 key[1],
                 key[2],
                 key[3],
+                key[4],
                 ordinal,
             ]
         )
@@ -816,8 +882,24 @@ def extract_snapshot(
     package = OoxmlPackage.open(document_path)
     object_identities = _ObjectIdentities()
     body = _story_nodes(package, profile, object_identities)
-    body.extend(_note_nodes(package, profile, "footnote", len(body)))
-    body.extend(_note_nodes(package, profile, "endnote", len(body)))
+    body.extend(
+        _note_nodes(
+            package,
+            profile,
+            "footnote",
+            len(body),
+            object_identities,
+        )
+    )
+    body.extend(
+        _note_nodes(
+            package,
+            profile,
+            "endnote",
+            len(body),
+            object_identities,
+        )
+    )
     headers = _section_story_nodes(
         package, profile, "header", object_identities
     )

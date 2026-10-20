@@ -139,6 +139,34 @@ def _add_notes_part(path: Path, kind: str, notes: dict[int, str]) -> None:
     replacement.replace(path)
 
 
+def _replace_note_part(
+    path: Path,
+    kind: str,
+    content: bytes,
+    *,
+    relationships: bytes | None = None,
+    media: bytes | None = None,
+) -> None:
+    replacement = path.with_suffix(f".{kind}-replacement.docx")
+    with ZipFile(path) as source, ZipFile(
+        replacement, "w", compression=ZIP_DEFLATED
+    ) as target:
+        replaced = {
+            f"word/{kind}s.xml",
+            f"word/_rels/{kind}s.xml.rels",
+            "word/media/note-image.bin",
+        }
+        for info in source.infolist():
+            if info.filename not in replaced:
+                target.writestr(info, source.read(info.filename))
+        target.writestr(f"word/{kind}s.xml", content)
+        if relationships is not None:
+            target.writestr(f"word/_rels/{kind}s.xml.rels", relationships)
+        if media is not None:
+            target.writestr("word/media/note-image.bin", media)
+    replacement.replace(path)
+
+
 def _png() -> BytesIO:
     return BytesIO(
         bytes.fromhex(
@@ -870,6 +898,174 @@ def test_extracts_notes_and_equations_deterministically(tmp_path: Path) -> None:
         ("footnote", "Second note"),
         ("endnote", "End note"),
     ]
+
+
+@pytest.mark.parametrize("kind", ["footnote", "endnote"])
+def test_extracts_complete_note_stories_with_type_id_and_geometry(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    document = Document()
+    document.add_paragraph("Body")
+    path = _save(document, tmp_path / "rich-notes.docx")
+    notes = (
+        b'<w:footnotes xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/'
+        b'officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/'
+        b'drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/'
+        b'drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/'
+        b'drawingml/2006/picture" xmlns:m="http://schemas.openxmlformats.org/'
+        b'officeDocument/2006/math"><w:footnote w:id="5"><w:p><w:r><w:t>'
+        b"First paragraph</w:t></w:r></w:p><w:p><w:r><w:drawing><wp:inline>"
+        b'<wp:docPr id="9" name="Note picture" descr=" Note image "/><a:graphic>'
+        b"<a:graphicData><pic:pic><pic:blipFill><a:blip r:embed=\"rIdNoteImage\"/>"
+        b"</pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline>"
+        b"</w:drawing></w:r></w:p><w:p><m:oMathPara><m:oMath><m:r><m:t>"
+        b"x + 1</m:t></m:r></m:oMath></m:oMathPara></w:p><w:tbl><w:tblGrid>"
+        b"<w:gridCol/><w:gridCol/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>A"
+        b"</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol/></w:tblGrid><w:tr>"
+        b"<w:tc><w:p><w:r><w:t>Nested</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+        b"</w:tc><w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr>"
+        b"</w:tbl><w:p><w:r><w:t>Last paragraph</w:t></w:r></w:p>"
+        b"</w:footnote></w:footnotes>"
+    ).replace(b"footnote", kind.encode())
+    relationships = (
+        b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
+        b'relationships"><Relationship Id="rIdNoteImage" Type="http://schemas.'
+        b'openxmlformats.org/officeDocument/2006/relationships/image" '
+        b'Target="media/note-image.bin"/></Relationships>'
+    )
+    _replace_note_part(
+        path,
+        kind,
+        notes,
+        relationships=relationships,
+        media=b"note-image",
+    )
+
+    first = extract_snapshot(path, PROFILE)
+    second = extract_snapshot(path, PROFILE)
+    note_nodes = [node for node in first["body"] if node.get("note_id") == "5"]
+
+    assert first == second
+    assert [
+        (node["node_type"], node["normalized_text"])
+        for node in note_nodes
+    ] == [
+        (kind, "First paragraph"),
+        ("image", "Note image"),
+        ("equation", "x + 1"),
+        ("table", "A \ufffc"),
+        ("table", "Nested"),
+        ("table", "B"),
+        (kind, "Last paragraph"),
+    ]
+    assert all(node["note_type"] == kind for node in note_nodes)
+    assert [node["source_location"]["index"] for node in note_nodes] == list(
+        range(1, 8)
+    )
+    assert note_nodes[1]["relationship_hash"] == canonical_sha256(
+        [hashlib.sha256(b"note-image").hexdigest(), f"{kind}:5", 1]
+    )
+    assert note_nodes[3]["table_geometry"] == {
+        "row_count": 1,
+        "column_count": 2,
+        "row": 1,
+        "column": 1,
+        "grid_span": 1,
+        "v_merge": None,
+    }
+    assert note_nodes[4]["table_geometry"] == {
+        "row_count": 1,
+        "column_count": 1,
+        "row": 1,
+        "column": 1,
+        "grid_span": 1,
+        "v_merge": None,
+    }
+
+
+def test_compare_rejects_deleted_image_only_note_and_reshaped_note_table(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    document.add_paragraph("Body")
+    before_path = _save(document, tmp_path / "note-objects-before.docx")
+    after_path = tmp_path / "note-objects-after.docx"
+    after_path.write_bytes(before_path.read_bytes())
+    prefix = (
+        b'<w:endnotes xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/'
+        b'officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/'
+        b'drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/'
+        b'drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/'
+        b'drawingml/2006/picture"><w:endnote w:id="8">'
+    )
+    image = (
+        b"<w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"8\" name=\"Image\" "
+        b'descr="Only image"/><a:graphic><a:graphicData><pic:pic><pic:blipFill>'
+        b'<a:blip r:embed="rIdNoteImage"/></pic:blipFill></pic:pic></a:graphicData>'
+        b"</a:graphic></wp:inline></w:drawing></w:r></w:p>"
+    )
+    table_2x2 = (
+        b"<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid><w:tr><w:tc>"
+        b"<w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B"
+        b"</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>C"
+        b"</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>D</w:t></w:r></w:p>"
+        b"</w:tc></w:tr></w:tbl>"
+    )
+    table_1x4 = (
+        b"<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/><w:gridCol/><w:gridCol/>"
+        b"</w:tblGrid><w:tr>"
+        + b"".join(
+            b"<w:tc><w:p><w:r><w:t>"
+            + value
+            + b"</w:t></w:r></w:p></w:tc>"
+            for value in (b"A", b"B", b"C", b"D")
+        )
+        + b"</w:tr></w:tbl>"
+    )
+    suffix = b"</w:endnote></w:endnotes>"
+    relationships = (
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
+        b'relationships"><Relationship Id="rIdNoteImage" Type="http://schemas.'
+        b'openxmlformats.org/officeDocument/2006/relationships/image" '
+        b'Target="media/note-image.bin"/></Relationships>'
+    )
+    _replace_note_part(
+        before_path,
+        "endnote",
+        prefix + image + table_2x2 + suffix,
+        relationships=relationships,
+        media=b"image-only-note",
+    )
+    _replace_note_part(
+        after_path,
+        "endnote",
+        prefix + table_1x4 + suffix,
+        relationships=relationships,
+        media=b"image-only-note",
+    )
+
+    comparison = compare_snapshots(
+        extract_snapshot(before_path, PROFILE),
+        extract_snapshot(after_path, PROFILE),
+    )
+
+    assert comparison["equivalent"] is False
+    assert any(
+        difference["kind"] == "removed"
+        and difference["before"]["node_type"] == "image"
+        and difference["before"]["note_type"] == "endnote"
+        and difference["before"]["note_id"] == "8"
+        for difference in comparison["differences"]
+    )
+    assert any(
+        difference["before"] is not None
+        and difference["before"]["node_type"] == "table"
+        for difference in comparison["differences"]
+    )
 
 
 def test_resolves_each_header_footer_type_independently_across_sections(

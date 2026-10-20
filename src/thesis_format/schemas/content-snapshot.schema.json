@@ -39,6 +39,7 @@
         "normalized_text": {"type": "string"},
         "relationship_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
         "note_id": {"type": "string"},
+        "note_type": {"enum": ["footnote", "endnote"]},
         "table_geometry": {
           "type": "object",
           "additionalProperties": false,
