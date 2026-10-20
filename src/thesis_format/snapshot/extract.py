@@ -654,6 +654,34 @@ def _story_nodes(
     return result
 
 
+def _note_story_blocks(
+    container: etree._Element,
+    base_path: str,
+) -> Iterable[tuple[etree._Element, str]]:
+    sibling_counts: Counter[str] = Counter()
+    for child in container:
+        qname = etree.QName(child)
+        sibling_counts[child.tag] += 1
+        prefix = child.prefix
+        if prefix is None:
+            prefix = next(
+                (
+                    candidate
+                    for candidate, namespace in NS.items()
+                    if namespace == qname.namespace
+                ),
+                "ns",
+            )
+        child_path = (
+            f"{base_path}/{prefix}:{qname.localname}"
+            f"[{sibling_counts[child.tag]}]"
+        )
+        if qname.localname in {"p", "tbl"} and qname.namespace == W_NS:
+            yield child, child_path
+        else:
+            yield from _note_story_blocks(child, child_path)
+
+
 def _note_nodes(
     package: OoxmlPackage,
     profile: FormatProfile,
@@ -684,13 +712,9 @@ def _note_nodes(
             pass
         base_path = f"/w:{kind}s/w:{kind}[@w:id='{note_id}']"
         story = f"{kind}:{note_id}"
-        paragraph_number = 0
-        table_number = 0
-        for child in note:
+        for child, child_path in _note_story_blocks(note, base_path):
             local = etree.QName(child).localname
             if local == "p":
-                paragraph_number += 1
-                paragraph_path = f"{base_path}/w:p[{paragraph_number}]"
                 text = _clean_paragraph(child, profile)
                 if text:
                     result.append(
@@ -698,7 +722,7 @@ def _note_nodes(
                             kind,
                             text,
                             part,
-                            paragraph_path,
+                            child_path,
                             source_index + len(result),
                             note_id=note_id,
                             note_type=kind,
@@ -709,7 +733,7 @@ def _note_nodes(
                         child,
                         package,
                         part,
-                        paragraph_path,
+                        child_path,
                         source_index + len(result),
                         story,
                         object_identities,
@@ -721,14 +745,13 @@ def _note_nodes(
                     _equations(
                         child,
                         part,
-                        paragraph_path,
+                        child_path,
                         source_index + len(result),
                         note_id=note_id,
                         note_type=kind,
                     )
                 )
             elif local == "tbl":
-                table_number += 1
                 _append_table_nodes(
                     result,
                     child,
@@ -736,7 +759,7 @@ def _note_nodes(
                     profile,
                     object_identities,
                     part=part,
-                    table_path=f"{base_path}/w:tbl[{table_number}]",
+                    table_path=child_path,
                     story=story,
                     index_offset=source_index,
                     note_id=note_id,

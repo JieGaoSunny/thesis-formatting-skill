@@ -28,6 +28,7 @@ from thesis_format.snapshot import (
 
 ROOT = Path(__file__).parents[1]
 PROFILE = load_profile(ROOT / "rules" / "apple-university.yaml")
+W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
 
 def _field(paragraph, instruction: str, result: str) -> None:
@@ -165,6 +166,66 @@ def _replace_note_part(
         if media is not None:
             target.writestr("word/media/note-image.bin", media)
     replacement.replace(path)
+
+
+def _structured_note(
+    kind: str,
+    *,
+    text: str = "Structured text",
+    include_image: bool = True,
+    table_rows: tuple[tuple[str, ...], ...] = (("A", "B"),),
+) -> bytes:
+    image = (
+        b"<w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"8\" name=\"Image\" "
+        b'descr="Structured image"/><a:graphic><a:graphicData><pic:pic>'
+        b'<pic:blipFill><a:blip r:embed="rIdNoteImage"/></pic:blipFill>'
+        b"</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+        if include_image
+        else b""
+    )
+    rows = b"".join(
+        b"<w:tr>"
+        + b"".join(
+            b"<w:tc><w:p><w:r><w:t>"
+            + value.encode()
+            + b"</w:t></w:r></w:p></w:tc>"
+            for value in row
+        )
+        + b"</w:tr>"
+        for row in table_rows
+    )
+    column_count = max(len(row) for row in table_rows)
+    table = (
+        b"<w:tbl><w:tblGrid>"
+        + b"<w:gridCol/>" * column_count
+        + b"</w:tblGrid>"
+        + rows
+        + b"</w:tbl>"
+    )
+    prefix = (
+        f'<w:{kind}s xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/'
+        f'officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/'
+        f'drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/'
+        f'drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/'
+        f'drawingml/2006/picture" xmlns:m="http://schemas.openxmlformats.org/'
+        f'officeDocument/2006/math"><w:{kind} w:id="9"><w:sdt><w:sdtPr/>'
+        f'<w:sdtContent><w:customXml><w:ins w:id="1" w:author="Editor">'
+        f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
+    ).encode()
+    suffix = (
+        f"</w:ins></w:customXml></w:sdtContent></w:sdt></w:{kind}>"
+        f"</w:{kind}s>"
+    ).encode()
+    return (
+        prefix
+        + image
+        + (
+            b"<w:p><m:oMathPara><m:oMath><m:r><m:t>x + 2</m:t></m:r></m:oMath>"
+            b"</m:oMathPara></w:p>"
+        )
+        + table
+        + suffix
+    )
 
 
 def _png() -> BytesIO:
@@ -1064,6 +1125,115 @@ def test_compare_rejects_deleted_image_only_note_and_reshaped_note_table(
     assert any(
         difference["before"] is not None
         and difference["before"]["node_type"] == "table"
+        for difference in comparison["differences"]
+    )
+
+
+@pytest.mark.parametrize("kind", ["footnote", "endnote"])
+def test_extracts_nested_structured_note_content_once_in_document_order(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    document = Document()
+    document.add_paragraph("Body")
+    path = _save(document, tmp_path / f"structured-{kind}.docx")
+    relationships = (
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
+        b'relationships"><Relationship Id="rIdNoteImage" Type="http://schemas.'
+        b'openxmlformats.org/officeDocument/2006/relationships/image" '
+        b'Target="media/note-image.bin"/></Relationships>'
+    )
+    _replace_note_part(
+        path,
+        kind,
+        _structured_note(kind),
+        relationships=relationships,
+        media=b"structured-note-image",
+    )
+
+    note_nodes = [
+        node
+        for node in extract_snapshot(path, PROFILE)["body"]
+        if node.get("note_id") == "9"
+    ]
+
+    assert [
+        (node["node_type"], node["normalized_text"])
+        for node in note_nodes
+    ] == [
+        (kind, "Structured text"),
+        ("image", "Structured image"),
+        ("equation", "x + 2"),
+        ("table", "A"),
+        ("table", "B"),
+    ]
+    assert [node["source_location"]["index"] for node in note_nodes] == list(
+        range(1, 6)
+    )
+    assert all(node["note_type"] == kind for node in note_nodes)
+    assert all(
+        "/w:sdt[1]/w:sdtContent[1]/w:customXml[1]/w:ins[1]/"
+        in node["source_location"]["path"]
+        for node in note_nodes
+    )
+
+
+def test_compare_detects_modified_and_deleted_structured_note_content(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    document.add_paragraph("Body")
+    before_path = _save(document, tmp_path / "structured-before.docx")
+    after_path = tmp_path / "structured-after.docx"
+    after_path.write_bytes(before_path.read_bytes())
+    relationships = (
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
+        b'relationships"><Relationship Id="rIdNoteImage" Type="http://schemas.'
+        b'openxmlformats.org/officeDocument/2006/relationships/image" '
+        b'Target="media/note-image.bin"/></Relationships>'
+    )
+    _replace_note_part(
+        before_path,
+        "footnote",
+        _structured_note("footnote"),
+        relationships=relationships,
+        media=b"structured-note-image",
+    )
+    _replace_note_part(
+        after_path,
+        "footnote",
+        _structured_note(
+            "footnote",
+            text="Changed structured text",
+            include_image=False,
+            table_rows=(("A",), ("B",)),
+        ),
+        relationships=relationships,
+        media=b"structured-note-image",
+    )
+
+    comparison = compare_snapshots(
+        extract_snapshot(before_path, PROFILE),
+        extract_snapshot(after_path, PROFILE),
+    )
+
+    assert comparison["equivalent"] is False
+    assert any(
+        difference["kind"] == "removed"
+        and difference["before"]["node_type"] == "image"
+        and difference["before"]["note_id"] == "9"
+        for difference in comparison["differences"]
+    )
+    assert any(
+        difference["before"] is not None
+        and difference["before"]["node_type"] == "footnote"
+        and difference["before"]["normalized_text"] == "Structured text"
+        for difference in comparison["differences"]
+    )
+    assert any(
+        difference["before"] is not None
+        and difference["before"]["node_type"] == "table"
+        and difference["before"]["table_geometry"]["row_count"] == 1
         for difference in comparison["differences"]
     )
 
