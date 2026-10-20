@@ -82,6 +82,78 @@ _SKIPPED_DIRECTORIES = {".git", ".hg", ".svn", "__pycache__", ".pytest_cache"}
 _WORDPROCESSINGML_NAMESPACE = (
     "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 )
+_PACKAGE_RELATIONSHIPS_NAMESPACE = (
+    "http://schemas.openxmlformats.org/package/2006/relationships"
+)
+_CONTENT_TYPES_NAMESPACE = (
+    "http://schemas.openxmlformats.org/package/2006/content-types"
+)
+_XML_SCHEMA_INSTANCE_NAMESPACE = "http://www.w3.org/2001/XMLSchema-instance"
+_MARKUP_COMPATIBILITY_NAMESPACE = (
+    "http://schemas.openxmlformats.org/markup-compatibility/2006"
+)
+_DRAWINGML_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_WORDPROCESSINGML_2010_NAMESPACE = (
+    "http://schemas.microsoft.com/office/word/2010/wordml"
+)
+_STRUCTURAL_OOXML_ATTRIBUTE_QNAMES = frozenset(
+    {
+        (_XML_SCHEMA_INSTANCE_NAMESPACE, "type"),
+        (_XML_SCHEMA_INSTANCE_NAMESPACE, "nil"),
+        (_XML_SCHEMA_INSTANCE_NAMESPACE, "schemaLocation"),
+        (_XML_SCHEMA_INSTANCE_NAMESPACE, "noNamespaceSchemaLocation"),
+        (_MARKUP_COMPATIBILITY_NAMESPACE, "Ignorable"),
+        (_MARKUP_COMPATIBILITY_NAMESPACE, "MustUnderstand"),
+        (_MARKUP_COMPATIBILITY_NAMESPACE, "ProcessContent"),
+        (_MARKUP_COMPATIBILITY_NAMESPACE, "PreserveElements"),
+        (_MARKUP_COMPATIBILITY_NAMESPACE, "PreserveAttributes"),
+    }
+)
+_STRUCTURAL_OOXML_ATTRIBUTE_CONTEXTS = frozenset(
+    {
+        (_PACKAGE_RELATIONSHIPS_NAMESPACE, "Relationship", None, "Id"),
+        (_PACKAGE_RELATIONSHIPS_NAMESPACE, "Relationship", None, "Type"),
+        (_PACKAGE_RELATIONSHIPS_NAMESPACE, "Relationship", None, "TargetMode"),
+        (_CONTENT_TYPES_NAMESPACE, "Default", None, "Extension"),
+        (_CONTENT_TYPES_NAMESPACE, "Default", None, "ContentType"),
+        (_CONTENT_TYPES_NAMESPACE, "Override", None, "PartName"),
+        (_CONTENT_TYPES_NAMESPACE, "Override", None, "ContentType"),
+        (
+            _WORDPROCESSINGML_NAMESPACE,
+            "sectPr",
+            _WORDPROCESSINGML_NAMESPACE,
+            "rsidSect",
+        ),
+        (
+            _WORDPROCESSINGML_NAMESPACE,
+            "rsid",
+            _WORDPROCESSINGML_NAMESPACE,
+            "val",
+        ),
+        (
+            _WORDPROCESSINGML_NAMESPACE,
+            "tmpl",
+            _WORDPROCESSINGML_NAMESPACE,
+            "val",
+        ),
+        (
+            _WORDPROCESSINGML_2010_NAMESPACE,
+            "docId",
+            _WORDPROCESSINGML_2010_NAMESPACE,
+            "val",
+        ),
+        (_DRAWINGML_NAMESPACE, "lin", None, "ang"),
+        *(
+            (
+                _WORDPROCESSINGML_NAMESPACE,
+                "sig",
+                _WORDPROCESSINGML_NAMESPACE,
+                name,
+            )
+            for name in ("usb0", "usb1", "usb2", "usb3", "csb0", "csb1")
+        ),
+    }
+)
 _BUILTIN_PATTERNS = (
     (
         "PRIVACY.ABSOLUTE_PATH",
@@ -724,12 +796,25 @@ class _Scanner:
                     and etree.QName(element).localname == "Relationship"
                     and etree.QName(name).localname == "Target"
                 )
+                element_name = etree.QName(element)
+                attribute_name = etree.QName(name)
+                structural_attribute = (
+                    (attribute_name.namespace, attribute_name.localname)
+                    in _STRUCTURAL_OOXML_ATTRIBUTE_QNAMES
+                    or (
+                        element_name.namespace,
+                        element_name.localname,
+                        attribute_name.namespace,
+                        attribute_name.localname,
+                    )
+                    in _STRUCTURAL_OOXML_ATTRIBUTE_CONTEXTS
+                )
                 scan_value = unquote(value) if is_relationship_target else value
                 self.scan_text(
                     scan_value,
                     path,
                     location,
-                    scan_profile_patterns=is_relationship_target,
+                    scan_profile_patterns=not structural_attribute,
                 )
 
     def scan_ooxml_metadata(

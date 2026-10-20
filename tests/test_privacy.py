@@ -95,6 +95,24 @@ def _profile_with_forbidden_keys(
     return path
 
 
+def _profile_with_generic_pattern(
+    tmp_path: Path,
+    *,
+    pattern_id: str,
+    regex: str,
+) -> Path:
+    profile = yaml.safe_load(PROFILE.read_text(encoding="utf-8"))
+    profile["privacy"]["generic_patterns"].append(
+        {"id": pattern_id, "regex": regex, "flags": "u"}
+    )
+    path = tmp_path / "profile.yaml"
+    path.write_text(
+        yaml.safe_dump(profile, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _write_pdf_metadata(path: Path, key: str, value: str) -> None:
     document = pikepdf.Pdf.new()
     document.add_blank_page()
@@ -231,6 +249,123 @@ def test_scans_uri_encoded_private_values_in_relationship_targets(
     rules = set(_rules(report))
     assert "PRIVACY.DENYLIST" in rules
     assert "PRIVACY.PATTERN.EMAIL" in rules
+
+
+@pytest.mark.parametrize(
+    "xml",
+    [
+        (
+            '<wp:docPr xmlns:wp="http://schemas.openxmlformats.org/drawingml/'
+            '2006/wordprocessingDrawing" descr="SecretName"/>'
+        ),
+        (
+            '<wp:docPr xmlns:wp="http://schemas.openxmlformats.org/drawingml/'
+            '2006/wordprocessingDrawing" title="SecretName"/>'
+        ),
+        '<root custom="SecretName"/>',
+        (
+            '<w:hyperlink xmlns:w="http://schemas.openxmlformats.org/'
+            'wordprocessingml/2006/main" w:anchor="SecretName"/>'
+        ),
+    ],
+    ids=("descr", "title", "custom", "hyperlink"),
+)
+def test_profile_patterns_scan_all_non_structural_ooxml_attribute_values(
+    tmp_path: Path,
+    xml: str,
+) -> None:
+    profile = _profile_with_generic_pattern(
+        tmp_path,
+        pattern_id="secret-name",
+        regex="SecretName",
+    )
+    document = tmp_path / "thesis.docx"
+    _write_docx(document, {"word/document.xml": xml})
+
+    report = release_check(document, profile, DENYLIST)
+
+    assert "PRIVACY.PATTERN.SECRET_NAME" in _rules(report)
+
+
+def test_profile_patterns_do_not_scan_xml_namespace_declarations(
+    tmp_path: Path,
+) -> None:
+    profile = _profile_with_generic_pattern(
+        tmp_path,
+        pattern_id="namespace-name",
+        regex="SecretName",
+    )
+    document = tmp_path / "thesis.docx"
+    _write_docx(
+        document,
+        {
+            "word/document.xml": (
+                '<root xmlns:private="https://schemas.example.test/SecretName"/>'
+            )
+        },
+    )
+
+    report = release_check(document, profile, DENYLIST)
+
+    assert "PRIVACY.PATTERN.NAMESPACE_NAME" not in _rules(report)
+
+
+@pytest.mark.parametrize(
+    "xml",
+    [
+        (
+            '<Relationship xmlns="http://schemas.openxmlformats.org/package/'
+            '2006/relationships" Id="SecretName" Target="safe.xml"/>'
+        ),
+        (
+            '<Relationship xmlns="http://schemas.openxmlformats.org/package/'
+            '2006/relationships" Type="SecretName" Target="safe.xml"/>'
+        ),
+        (
+            '<root xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+            'xsi:schemaLocation="SecretName"/>'
+        ),
+        (
+            '<root xmlns:mc="http://schemas.openxmlformats.org/'
+            'markup-compatibility/2006" mc:Ignorable="SecretName"/>'
+        ),
+    ],
+    ids=("relationship-id", "relationship-type", "schema-location", "mc-prefix"),
+)
+def test_profile_patterns_skip_only_explicit_structural_ooxml_attributes(
+    tmp_path: Path,
+    xml: str,
+) -> None:
+    profile = _profile_with_generic_pattern(
+        tmp_path,
+        pattern_id="secret-name",
+        regex="SecretName",
+    )
+    document = tmp_path / "thesis.docx"
+    _write_docx(document, {"word/document.xml": xml})
+
+    report = release_check(document, profile, DENYLIST)
+
+    assert "PRIVACY.PATTERN.SECRET_NAME" not in _rules(report)
+
+
+def test_denylist_still_scans_structural_ooxml_attribute_values(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "thesis.docx"
+    _write_docx(
+        document,
+        {
+            "word/_rels/document.xml.rels": (
+                '<Relationship xmlns="http://schemas.openxmlformats.org/package/'
+                '2006/relationships" Type="Secret Student" Target="safe.xml"/>'
+            )
+        },
+    )
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    assert "PRIVACY.DENYLIST" in _rules(report)
 
 
 @pytest.mark.parametrize("placeholder", ["todo", "tbd"])
