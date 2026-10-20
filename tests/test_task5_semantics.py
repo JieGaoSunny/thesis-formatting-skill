@@ -14,6 +14,7 @@ from thesis_format.audit import (
     audit_document,
     render_audit_markdown,
 )
+from thesis_format.contracts import validate_audit
 from thesis_format.profile import load_profile
 from thesis_format.semantic import inspect_document
 
@@ -480,6 +481,66 @@ def test_header_linking_uses_targets_and_dynamic_sources_require_styleref(
     document.sections[1].header.paragraphs[0].text = "Different header"
     document.save(unlinked)
     assert "HEADER.FOOTER.LINKING" in _rule_ids(unlinked)
+
+
+def test_header_footer_nested_findings_use_part_paragraph_locations(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "story-findings.docx",
+        [{"text": "正文"}],
+        add_header_footer=True,
+    )
+    for part_name, private_text, missing_target in (
+        ("word/header1.xml", "author@example.com", "missing_header"),
+        ("word/footer1.xml", "12345678", "missing_footer"),
+    ):
+        root = _xml(path, part_name)
+        paragraph = root.find(".//w:p", namespaces=NS)
+        assert paragraph is not None
+        text = etree.SubElement(etree.SubElement(paragraph, f"{W}r"), f"{W}t")
+        text.text = f" {private_text}"
+        field = etree.SubElement(paragraph, f"{W}fldSimple")
+        field.set(f"{W}instr", f" REF {missing_target} ")
+        _replace_part(path, part_name, root)
+
+    semantic = inspect_document(path, PROFILE)
+    assert [node.location for node in semantic.headers] == [
+        "part:word/header1.xml#paragraph:1"
+    ]
+    assert [node.location for node in semantic.footers] == [
+        "part:word/footer1.xml#paragraph:1"
+    ]
+
+    first = audit_document(path, PROFILE, clock=lambda: NOW)
+    second = audit_document(path, PROFILE, clock=lambda: NOW)
+    story_findings = [
+        finding
+        for finding in first["findings"]
+        if finding["rule_id"]
+        in {
+            "FIELD.CROSS_REFERENCE.TARGET",
+            "PRIVACY.PATTERN.EMAIL",
+            "PRIVACY.PATTERN.STUDENT_ID",
+        }
+    ]
+
+    assert [
+        (finding["location"], finding["rule_id"]) for finding in story_findings
+    ] == [
+        (
+            "part:word/footer1.xml#paragraph:1",
+            "FIELD.CROSS_REFERENCE.TARGET",
+        ),
+        ("part:word/footer1.xml#paragraph:1", "PRIVACY.PATTERN.STUDENT_ID"),
+        (
+            "part:word/header1.xml#paragraph:1",
+            "FIELD.CROSS_REFERENCE.TARGET",
+        ),
+        ("part:word/header1.xml#paragraph:1", "PRIVACY.PATTERN.EMAIL"),
+    ]
+    assert first["findings"] == second["findings"]
+    validate_audit(first)
 
 
 def test_front_and_body_page_resets_follow_semantic_region_starts(

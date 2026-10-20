@@ -774,9 +774,11 @@ def _story_paragraphs(
     result: list[SemanticParagraph] = []
     style_names = _style_map(package)
     relationships = package.relationships()
-    for section_index, (_, part_name) in enumerate(
-        package.related_parts("word/document.xml", relationship_kind), start=1
-    ):
+    related_parts = sorted(
+        package.related_parts("word/document.xml", relationship_kind),
+        key=lambda item: item[1],
+    )
+    for _, part_name in related_parts:
         root = package.xml(part_name)
         elements = tuple(root.xpath(".//w:p", namespaces=NS))
         relationship_by_id = _relationship_map(relationships, part_name)
@@ -785,10 +787,7 @@ def _story_paragraphs(
             style_id = _style_id(element)
             result.append(
                 SemanticParagraph(
-                    location=(
-                        f"{relationship_kind}:{section_index}:"
-                        f"paragraph:{paragraph_index}"
-                    ),
+                    location=f"part:{part_name}#paragraph:{paragraph_index}",
                     raw_text=_text(element),
                     style_id=style_id,
                     style_name=style_names.get(style_id) if style_id else None,

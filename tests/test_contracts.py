@@ -771,6 +771,8 @@ def test_privacy_contract_rejects_obsolete_matched_text_model(
         "cell:4/2/1",
         "header:2",
         "footer:2",
+        "part:word/header1.xml#paragraph:3",
+        "part:word/footer2.xml#paragraph:4",
         "part:word/comments.xml",
     ],
 )
@@ -786,7 +788,15 @@ def test_audit_accepts_every_approved_location_syntax(location: str) -> None:
 
 @pytest.mark.parametrize(
     "location",
-    ["section:0", "cell:1/0/2", "part:", "page:1", "paragraph:-1"],
+    [
+        "section:0",
+        "cell:1/0/2",
+        "part:",
+        "page:1",
+        "paragraph:-1",
+        "header:1:paragraph:1",
+        "footer:1:paragraph:1",
+    ],
 )
 def test_audit_rejects_unapproved_location_syntax(location: str) -> None:
     audit = fixture("audit")
