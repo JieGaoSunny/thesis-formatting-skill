@@ -614,14 +614,10 @@ def _story_nodes(
     if body is None:
         return []
     result: list[dict[str, object]] = []
-    paragraph_number = 0
-    table_number = 0
     source_index = 0
-    for child in body:
+    for child, base_path in _story_blocks(body, "/w:document/w:body"):
         local = etree.QName(child).localname
         if local == "p":
-            paragraph_number += 1
-            base_path = f"/w:document/w:body/w:p[{paragraph_number}]"
             visible = _paragraph_text(child, exclude_results=False)
             role = _paragraph_role(child, visible, profile)
             text = _clean_paragraph(child, profile)
@@ -667,7 +663,6 @@ def _story_nodes(
             result.extend(equations)
             source_index += len(equations)
         elif local == "tbl":
-            table_number += 1
             _append_table_nodes(
                 result,
                 child,
@@ -675,7 +670,7 @@ def _story_nodes(
                 profile,
                 object_identities,
                 part="word/document.xml",
-                table_path=f"/w:document/w:body/w:tbl[{table_number}]",
+                table_path=base_path,
                 story="body",
             )
             source_index = len(result)
@@ -798,16 +793,12 @@ def _section_story_nodes(
             )
             root = package.xml(part)
             story = f"{kind}:section:{section_index}:{reference_type}"
-            paragraph_number = 0
-            table_number = 0
-            for child in root:
+            story_path = (
+                f"/section[{section_index}]/{kind}[{reference_type}]"
+            )
+            for child, base_path in _story_blocks(root, story_path):
                 local = etree.QName(child).localname
                 if local == "p":
-                    paragraph_number += 1
-                    base_path = (
-                        f"/section[{section_index}]/{kind}[{reference_type}]"
-                        f"/w:p[{paragraph_number}]"
-                    )
                     text = _clean_paragraph(child, profile)
                     if text:
                         result.append(
@@ -838,11 +829,6 @@ def _section_story_nodes(
                     )
                     result.extend(equations)
                 elif local == "tbl":
-                    table_number += 1
-                    base_path = (
-                        f"/section[{section_index}]/{kind}[{reference_type}]"
-                        f"/w:tbl[{table_number}]"
-                    )
                     _append_table_nodes(
                         result,
                         child,

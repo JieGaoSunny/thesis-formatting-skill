@@ -123,6 +123,55 @@ def _wrap_cell_blocks(cell) -> None:
     cell._tc.append(structured_document_tag)
 
 
+def _wrap_story_blocks(container, wrapper: str) -> None:
+    blocks = [
+        child
+        for child in list(container)
+        if child.tag in {qn("w:p"), qn("w:tbl")}
+    ]
+    if wrapper == "sdt":
+        content = OxmlElement("w:sdtContent")
+        for block in blocks:
+            content.append(block)
+        wrapped = OxmlElement("w:sdt")
+        wrapped.append(OxmlElement("w:sdtPr"))
+        wrapped.append(content)
+    else:
+        wrapped = OxmlElement("w:customXml")
+        for block in blocks:
+            wrapped.append(block)
+    container.insert(0, wrapped)
+
+
+def _add_wrapped_story_content(
+    document: Document,
+    story: str,
+    wrapper: str,
+    label: str | None,
+) -> None:
+    if story == "body":
+        parent = document
+        container = document._element.body
+        paragraph = document.add_paragraph()
+    else:
+        parent = getattr(document.sections[0], story)
+        container = parent._element
+        paragraph = parent.paragraphs[0]
+    if label is not None:
+        paragraph.text = f"{label} paragraph"
+        image_run = parent.add_paragraph().add_run()
+        inline = image_run.add_picture(_png(), width=Inches(0.1))
+        inline._inline.docPr.set("descr", f"{label} image")
+        equation = parent.add_paragraph()
+        _append_equation(equation, f"{label} equation")
+        if story == "body":
+            table = parent.add_table(rows=1, cols=1)
+        else:
+            table = parent.add_table(rows=1, cols=1, width=Inches(1))
+        table.cell(0, 0).text = f"{label} table"
+    _wrap_story_blocks(container, wrapper)
+
+
 def _paragraph_with_note(
     document: Document,
     before: str,
@@ -350,6 +399,87 @@ def test_extracts_fields_tables_references_headers_footers_and_empty_cells(
     assert cells == ["A", "", "C", "D"]
     assert [node["normalized_text"] for node in snapshot["headers"]] == ["Header One"]
     assert [node["normalized_text"] for node in snapshot["footers"]] == ["Footer"]
+
+
+@pytest.mark.parametrize("wrapper", ["sdt", "customXml"])
+def test_extracts_top_level_wrapped_story_blocks_once_in_document_order(
+    tmp_path: Path,
+    wrapper: str,
+) -> None:
+    document = Document()
+    for story in ("body", "header", "footer"):
+        _add_wrapped_story_content(document, story, wrapper, "Original")
+
+    snapshot = extract_snapshot(
+        _save(document, tmp_path / f"wrapped-stories-{wrapper}.docx"),
+        PROFILE,
+    )
+
+    expected_types = {
+        "body": ["paragraph", "image", "equation", "table"],
+        "headers": ["header", "image", "equation", "table"],
+        "footers": ["footer", "image", "equation", "table"],
+    }
+    wrapper_path = (
+        "/w:sdt[1]/w:sdtContent[1]/"
+        if wrapper == "sdt"
+        else "/w:customXml[1]/"
+    )
+    for collection, node_types in expected_types.items():
+        nodes = snapshot[collection]
+        assert [node["node_type"] for node in nodes] == node_types
+        assert [
+            node["source_location"]["index"] for node in nodes
+        ] == list(range(4))
+        assert all(
+            wrapper_path in node["source_location"]["path"]
+            for node in nodes
+        )
+
+
+@pytest.mark.parametrize("wrapper", ["sdt", "customXml"])
+def test_compare_detects_changes_and_deletions_in_top_level_wrapped_stories(
+    tmp_path: Path,
+    wrapper: str,
+) -> None:
+    documents = {}
+    for state, label in (
+        ("before", "Original"),
+        ("changed", "Changed"),
+        ("deleted", None),
+    ):
+        document = Document()
+        for story in ("body", "header", "footer"):
+            _add_wrapped_story_content(document, story, wrapper, label)
+        documents[state] = extract_snapshot(
+            _save(document, tmp_path / f"wrapped-{wrapper}-{state}.docx"),
+            PROFILE,
+        )
+
+    changed = compare_snapshots(documents["before"], documents["changed"])
+    deleted = compare_snapshots(documents["before"], documents["deleted"])
+    expected_types = {
+        "body": {"paragraph", "image", "equation", "table"},
+        "headers": {"header", "image", "equation", "table"},
+        "footers": {"footer", "image", "equation", "table"},
+    }
+    for collection, node_types in expected_types.items():
+        before_parts = {
+            node["source_location"]["part"]
+            for node in documents["before"][collection]
+        }
+        assert {
+            difference["before"]["node_type"]
+            for difference in changed["differences"]
+            if difference["kind"] == "changed"
+            and difference["before"]["source_location"]["part"] in before_parts
+        } == node_types
+        assert {
+            difference["before"]["node_type"]
+            for difference in deleted["differences"]
+            if difference["kind"] == "removed"
+            and difference["before"]["source_location"]["part"] in before_parts
+        } == node_types
 
 
 def test_extracts_figure_alt_text_and_target_sha256(tmp_path: Path) -> None:
