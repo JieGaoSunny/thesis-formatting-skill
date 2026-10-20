@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
+import os
+import shutil
 import stat
 import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
@@ -75,11 +79,35 @@ class CliDependencies:
     privacy_check: PrivacyFunction | None = _default_release_check
 
 
-@dataclass(frozen=True)
-class _ArtifactIdentity:
+@dataclass
+class _PublishedArtifact:
+    path: Path
+    descriptor: int
     device: int
     inode: int
-    sha256: str
+
+    def close(self) -> None:
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+
+    def verify_path(self) -> None:
+        current = self.path.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or (current.st_dev, current.st_ino) != (self.device, self.inode)
+        ):
+            raise ValueError(f"published artifact was replaced: {self.path}")
+
+    def rollback(self) -> None:
+        try:
+            current = self.path.stat(follow_symlinks=False)
+            if (current.st_dev, current.st_ino) == (self.device, self.inode):
+                self.path.unlink()
+        except OSError:
+            pass
+        finally:
+            self.close()
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -290,45 +318,87 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _capture_artifact_identity(path: Path) -> _ArtifactIdentity | None:
-    try:
-        before = path.stat(follow_symlinks=False)
-        if not stat.S_ISREG(before.st_mode):
-            return None
-        sha256 = _sha256_file(path)
-        after = path.stat(follow_symlinks=False)
-    except OSError:
-        return None
-    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
-        return None
-    return _ArtifactIdentity(before.st_dev, before.st_ino, sha256)
+def _private_staging_directory(parent: Path) -> Path:
+    for _ in range(100):
+        staging = parent / f".thesis-export-{uuid.uuid4().hex}"
+        try:
+            staging.mkdir(mode=0o700)
+        except FileExistsError:
+            continue
+        staging.chmod(0o700)
+        return staging
+    raise RuntimeError(f"could not create private export staging directory: {parent}")
 
 
-def _remove_exact_artifact(
-    path: Path, expected: _ArtifactIdentity | None
-) -> None:
-    if expected is None:
-        return
+def _open_staged_artifact(path: Path, destination: Path) -> _PublishedArtifact:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    details = os.fstat(descriptor)
+    if not stat.S_ISREG(details.st_mode):
+        os.close(descriptor)
+        raise ValueError(f"staged artifact is not a regular file: {path}")
+    return _PublishedArtifact(
+        path=destination,
+        descriptor=descriptor,
+        device=details.st_dev,
+        inode=details.st_ino,
+    )
+
+
+def _publish_exclusive(staged: Path, destination: Path) -> _PublishedArtifact:
+    staged_artifact = _open_staged_artifact(staged, destination)
     try:
-        before = path.stat(follow_symlinks=False)
-        if not stat.S_ISREG(before.st_mode):
-            return
-        if (before.st_dev, before.st_ino) != (
-            expected.device,
-            expected.inode,
-        ):
-            return
-        if _sha256_file(path) != expected.sha256:
-            return
-        after = path.stat(follow_symlinks=False)
-        if (after.st_dev, after.st_ino) != (
-            expected.device,
-            expected.inode,
-        ):
-            return
-        path.unlink()
-    except OSError:
-        return
+        os.link(staged, destination, follow_symlinks=False)
+    except FileExistsError as error:
+        staged_artifact.close()
+        raise ValueError(
+            f"artifact destination already exists: {destination}"
+        ) from error
+    except OSError as error:
+        staged_artifact.close()
+        if error.errno not in {
+            errno.EXDEV,
+            errno.EPERM,
+            errno.EACCES,
+            errno.ENOTSUP,
+            errno.EOPNOTSUPP,
+        }:
+            raise
+        try:
+            descriptor = os.open(
+                destination,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                staged.stat().st_mode & 0o777,
+            )
+        except FileExistsError as exclusive_error:
+            raise ValueError(
+                f"artifact destination already exists: {destination}"
+            ) from exclusive_error
+        details = os.fstat(descriptor)
+        published = _PublishedArtifact(
+            path=destination,
+            descriptor=os.dup(descriptor),
+            device=details.st_dev,
+            inode=details.st_ino,
+        )
+        try:
+            with staged.open("rb") as source, os.fdopen(descriptor, "wb") as target:
+                shutil.copyfileobj(source, target)
+                target.flush()
+                os.fsync(target.fileno())
+        except BaseException:
+            published.rollback()
+            raise
+        published.verify_path()
+        return published
+    try:
+        staged_artifact.verify_path()
+    except BaseException:
+        staged_artifact.rollback()
+        raise
+    return staged_artifact
 
 
 def _validate_returned_artifacts(paths: Sequence[Path]) -> None:
@@ -404,21 +474,32 @@ def _run_export(args: argparse.Namespace, function: ExportFunction | None) -> in
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     _require_missing(args.output, "PDF output")
     _require_missing(args.manifest, "render manifest")
-    provider_result = function(args.source, args.output, args.manifest)
-    published = {
-        args.output: _capture_artifact_identity(args.output),
-        args.manifest: _capture_artifact_identity(args.manifest),
-    }
+    staging_directories: dict[Path, Path] = {}
+    published: list[_PublishedArtifact] = []
     try:
+        for parent in (args.output.parent, args.manifest.parent):
+            resolved_parent = parent.resolve()
+            if resolved_parent not in staging_directories:
+                staging_directories[resolved_parent] = _private_staging_directory(
+                    parent
+                )
+        staged_output = (
+            staging_directories[args.output.parent.resolve()] / args.output.name
+        )
+        staged_manifest = (
+            staging_directories[args.manifest.parent.resolve()]
+            / args.manifest.name
+        )
+        provider_result = function(args.source, staged_output, staged_manifest)
         returned_paths = _provider_paths(provider_result)
-        _require_nonempty_regular_file(args.output, "PDF output")
-        manifest = _validate_render_manifest_file(args.manifest)
-        actual_pdf_sha256 = _sha256_file(args.output)
+        _require_nonempty_regular_file(staged_output, "PDF output")
+        manifest = _validate_render_manifest_file(staged_manifest)
+        actual_pdf_sha256 = _sha256_file(staged_output)
         expected_pdf_sha256 = manifest["raw_pdf_sha256"]
         if actual_pdf_sha256 != expected_pdf_sha256:
             raise ValueError(
                 "PDF output SHA-256 does not match render manifest "
-                f"raw_pdf_sha256: {args.output}"
+                f"raw_pdf_sha256: {staged_output}"
             )
         if not _is_canonical_render_manifest(manifest):
             if not args.allow_noncanonical:
@@ -434,13 +515,22 @@ def _run_export(args: argparse.Namespace, function: ExportFunction | None) -> in
             tuple(
                 path
                 for path in returned_paths
-                if path not in {args.output, args.manifest}
+                if path not in {staged_output, staged_manifest}
             )
         )
-    except (OSError, RuntimeError, ValueError):
-        for path, identity in published.items():
-            _remove_exact_artifact(path, identity)
+        published.append(_publish_exclusive(staged_output, args.output))
+        published.append(_publish_exclusive(staged_manifest, args.manifest))
+        for artifact in published:
+            artifact.verify_path()
+    except BaseException:
+        for artifact in reversed(published):
+            artifact.rollback()
         raise
+    finally:
+        for artifact in published:
+            artifact.close()
+        for staging in staging_directories.values():
+            shutil.rmtree(staging, ignore_errors=True)
     print(args.output)
     return 0
 
