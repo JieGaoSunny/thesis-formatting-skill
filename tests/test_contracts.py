@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import math
 from importlib import resources
 from pathlib import Path
 
@@ -150,6 +152,110 @@ def test_canonical_json_is_nfc_utf8_sorted_compact_and_newline_terminated() -> N
     value = {"z": "e\u0301", "汉字": ["cafe\u0301"], "a": 1}
 
     assert canonical_json(value) == '{"a":1,"z":"é","汉字":["café"]}\n'
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (1e20, "100000000000000000000"),
+        (1e-7, "1e-7"),
+        (-0.0, "0"),
+        (2.0, "2"),
+        (1e30, "1e+30"),
+        (1e-6, "0.000001"),
+    ],
+)
+def test_canonical_json_uses_jcs_number_serialization(
+    value: float, expected: str
+) -> None:
+    assert canonical_json(value) == f"{expected}\n"
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_canonical_json_rejects_non_finite_numbers(value: float) -> None:
+    with pytest.raises((ContractError, ValueError), match="finite|compliant"):
+        canonical_json({"value": value})
+
+
+def test_stable_ids_use_jcs_number_serialization() -> None:
+    expected = hashlib.sha256(b'{"value":100000000000000000000}\n').hexdigest()[:16]
+
+    assert stable_id({"value": 1e20}) == expected
+
+
+def test_format_profile_rejects_non_positive_or_infeasible_geometry() -> None:
+    profile = fixture("format-profile")
+    profile["page"]["body"]["left_mm"] = 0
+    with pytest.raises(ContractError, match=r"margin|positive"):
+        validate_contract("format-profile", profile)
+
+    profile = fixture("format-profile")
+    profile["page"]["body"]["left_mm"] = 105
+    profile["page"]["body"]["right_mm"] = 105
+    with pytest.raises(ContractError, match=r"content width|margins"):
+        validate_contract("format-profile", profile)
+
+
+def test_format_profile_rejects_reversed_toc_levels() -> None:
+    profile = fixture("format-profile")
+    profile["fields"]["toc"]["levels"] = {"min": 4, "max": 3}
+
+    with pytest.raises(ContractError, match=r"TOC|min.*max"):
+        validate_contract("format-profile", profile)
+
+
+def test_format_profile_rejects_reversed_position_range() -> None:
+    profile = fixture("format-profile")
+    constraint = profile["role_detection"]["position_constraints"]["heading_1"][0]
+    constraint["min_index"] = 5
+    constraint["max_index"] = 4
+
+    with pytest.raises(ContractError, match=r"min_index.*max_index"):
+        validate_contract("format-profile", profile)
+
+
+@pytest.mark.parametrize(
+    ("collection_path", "pattern_key"),
+    [
+        (("role_detection", "text_patterns", "heading_1"), "pattern"),
+        (("privacy", "generic_patterns"), "regex"),
+    ],
+)
+def test_format_profile_compiles_all_configured_regexes(
+    collection_path: tuple[str, ...], pattern_key: str
+) -> None:
+    profile = fixture("format-profile")
+    collection = value_at_path(profile, collection_path)
+    assert isinstance(collection, list)
+    collection[0][pattern_key] = "("
+
+    with pytest.raises(ContractError, match=r"regular expression|regex"):
+        validate_contract("format-profile", profile)
+
+
+def test_format_profile_compiles_unresolved_placeholder_regexes() -> None:
+    profile = fixture("format-profile")
+    profile["privacy"]["unresolved_placeholder_patterns"][0] = "("
+
+    with pytest.raises(ContractError, match=r"regular expression|regex"):
+        validate_contract("format-profile", profile)
+
+
+def test_format_profile_rejects_incompatible_regex_flags() -> None:
+    profile = fixture("format-profile")
+    pattern = profile["role_detection"]["text_patterns"]["heading_1"][0]
+    pattern["flags"] = ["ascii", "unicode"]
+
+    with pytest.raises(ContractError, match=r"incompatible|flags"):
+        validate_contract("format-profile", profile)
+
+
+def test_format_profile_rejects_duplicate_privacy_regex_flags() -> None:
+    profile = fixture("format-profile")
+    profile["privacy"]["generic_patterns"][0]["flags"] = "ii"
+
+    with pytest.raises(ContractError, match=r"duplicate|flags"):
+        validate_contract("format-profile", profile)
 
 
 def test_digest_prefixes_extend_collisions_four_characters_at_a_time() -> None:

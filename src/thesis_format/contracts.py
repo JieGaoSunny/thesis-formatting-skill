@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
+import re
 import unicodedata
 from collections import Counter
 from functools import lru_cache
@@ -26,6 +28,18 @@ CONTRACT_NAMES = frozenset(
         "render-manifest",
     }
 )
+_MAX_SAFE_INTEGER = 2**53 - 1
+_TEXT_PATTERN_FLAGS = {
+    "ascii": re.ASCII,
+    "ignore_case": re.IGNORECASE,
+    "multiline": re.MULTILINE,
+    "unicode": re.UNICODE,
+}
+_PRIVACY_PATTERN_FLAGS = {
+    "i": re.IGNORECASE,
+    "m": re.MULTILINE,
+    "u": re.UNICODE,
+}
 
 
 class ContractError(ValueError):
@@ -61,6 +75,8 @@ def _json_path(path: Sequence[str | int]) -> str:
 
 def _normalize(value: Any) -> Any:
     if isinstance(value, str):
+        if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+            raise ContractError("canonical JSON strings cannot contain lone surrogates")
         return unicodedata.normalize("NFC", value)
     if isinstance(value, list):
         return [_normalize(item) for item in value]
@@ -81,19 +97,78 @@ def _normalize(value: Any) -> Any:
     return value
 
 
-def canonical_json(value: Any) -> str:
-    """Serialize JSON deterministically with NFC strings and a final newline."""
+def _expand_decimal(mantissa: str, exponent: int) -> str:
+    negative = mantissa.startswith("-")
+    unsigned = mantissa.removeprefix("-")
+    digits = unsigned.replace(".", "")
+    decimal_position = unsigned.find(".")
+    if decimal_position < 0:
+        decimal_position = len(digits)
+    decimal_position += exponent
 
-    return (
-        json.dumps(
-            _normalize(value),
-            ensure_ascii=False,
-            allow_nan=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n"
+    if decimal_position <= 0:
+        rendered = "0." + "0" * -decimal_position + digits
+    elif decimal_position >= len(digits):
+        rendered = digits + "0" * (decimal_position - len(digits))
+    else:
+        rendered = digits[:decimal_position] + "." + digits[decimal_position:]
+    return f"-{rendered}" if negative else rendered
+
+
+def _serialize_float(value: float) -> str:
+    if not math.isfinite(value):
+        raise ContractError("canonical JSON numbers must be finite")
+    if value == 0:
+        return "0"
+
+    rendered = repr(value).lower()
+    if "e" not in rendered:
+        return rendered.removesuffix(".0")
+
+    mantissa, exponent_text = rendered.split("e")
+    exponent = int(exponent_text)
+    if 1e-6 <= abs(value) < 1e21:
+        return _expand_decimal(mantissa, exponent)
+
+    mantissa = mantissa.removesuffix(".0")
+    sign = "+" if exponent >= 0 else "-"
+    return f"{mantissa}e{sign}{abs(exponent)}"
+
+
+def _serialize_canonical(value: Any) -> str:
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, int):
+        if abs(value) > _MAX_SAFE_INTEGER:
+            raise ContractError(
+                "canonical JSON integers must be exactly representable by IEEE-754"
+            )
+        return str(value)
+    if isinstance(value, float):
+        return _serialize_float(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if isinstance(value, list):
+        return "[" + ",".join(_serialize_canonical(item) for item in value) + "]"
+    if isinstance(value, Mapping):
+        keys = sorted(value, key=lambda key: key.encode("utf-16-be"))
+        return "{" + ",".join(
+            f"{_serialize_canonical(key)}:{_serialize_canonical(value[key])}"
+            for key in keys
+        ) + "}"
+    raise ContractError(
+        f"unsupported canonical JSON value type {type(value).__name__!r}"
     )
+
+
+def canonical_json(value: Any) -> str:
+    """Serialize NFC-normalized JSON with RFC 8785/JCS number semantics."""
+
+    return _serialize_canonical(_normalize(value)) + "\n"
 
 
 def canonical_sha256(value: Any) -> str:
@@ -370,7 +445,125 @@ def _validate_render(report: dict[str, Any]) -> None:
     _validate_top_id(report, "render_id")
 
 
+def _compile_regex(
+    pattern: str,
+    flag_names: Sequence[str],
+    flag_map: Mapping[str, re.RegexFlag],
+    path: tuple[str | int, ...],
+) -> None:
+    if len(flag_names) != len(set(flag_names)):
+        raise ContractError("regex flags must not contain duplicates", path)
+    unsupported = sorted(set(flag_names) - flag_map.keys())
+    if unsupported:
+        raise ContractError(
+            f"unsupported regex flags: {', '.join(unsupported)}",
+            path,
+        )
+
+    flags = re.NOFLAG
+    for flag_name in flag_names:
+        flags |= flag_map[flag_name]
+    try:
+        re.compile(pattern, flags)
+    except (re.error, ValueError) as error:
+        raise ContractError(
+            f"invalid regular expression or incompatible flags: {error}",
+            path,
+            cause=error,
+        ) from error
+
+
+def _validate_format_profile(profile: dict[str, Any]) -> None:
+    paper = profile["page"]["paper"]
+    margins = profile["page"]["body"]
+    measurements = {
+        ("page", "paper", "width_mm"): paper["width_mm"],
+        ("page", "paper", "height_mm"): paper["height_mm"],
+        ("page", "body", "top_mm"): margins["top_mm"],
+        ("page", "body", "bottom_mm"): margins["bottom_mm"],
+        ("page", "body", "left_mm"): margins["left_mm"],
+        ("page", "body", "right_mm"): margins["right_mm"],
+    }
+    for path, measurement in measurements.items():
+        if not math.isfinite(measurement) or measurement <= 0:
+            raise ContractError(
+                "paper dimensions and margins must be positive finite numbers",
+                path,
+            )
+
+    content_width = (
+        paper["width_mm"] - margins["left_mm"] - margins["right_mm"]
+    )
+    content_height = (
+        paper["height_mm"] - margins["top_mm"] - margins["bottom_mm"]
+    )
+    if content_width <= 0:
+        raise ContractError(
+            "margins must leave positive content width",
+            ("page", "body"),
+        )
+    if content_height <= 0:
+        raise ContractError(
+            "margins must leave positive content height",
+            ("page", "body"),
+        )
+
+    toc_levels = profile["fields"]["toc"]["levels"]
+    if toc_levels["min"] > toc_levels["max"]:
+        raise ContractError(
+            "TOC levels require min <= max",
+            ("fields", "toc", "levels"),
+        )
+
+    position_constraints = profile["role_detection"]["position_constraints"]
+    for role, constraints in position_constraints.items():
+        for index, constraint in enumerate(constraints):
+            maximum = constraint["max_index"]
+            if maximum is not None and constraint["min_index"] > maximum:
+                raise ContractError(
+                    "position range requires min_index <= max_index",
+                    (
+                        "role_detection",
+                        "position_constraints",
+                        role,
+                        index,
+                    ),
+                )
+
+    text_patterns = profile["role_detection"]["text_patterns"]
+    for role, patterns in text_patterns.items():
+        for index, pattern in enumerate(patterns):
+            _compile_regex(
+                pattern["pattern"],
+                pattern["flags"],
+                _TEXT_PATTERN_FLAGS,
+                (
+                    "role_detection",
+                    "text_patterns",
+                    role,
+                    index,
+                ),
+            )
+
+    privacy = profile["privacy"]
+    for index, pattern in enumerate(privacy["generic_patterns"]):
+        _compile_regex(
+            pattern["regex"],
+            list(pattern["flags"]),
+            _PRIVACY_PATTERN_FLAGS,
+            ("privacy", "generic_patterns", index),
+        )
+    for index, pattern in enumerate(privacy["unresolved_placeholder_patterns"]):
+        _compile_regex(
+            pattern,
+            (),
+            _PRIVACY_PATTERN_FLAGS,
+            ("privacy", "unresolved_placeholder_patterns", index),
+        )
+
+
 SEMANTIC_VALIDATORS = {
+    "format-profile": _validate_format_profile,
     "audit": _validate_audit,
     "transformation-result": _validate_transformation,
     "content-snapshot": _validate_snapshot,
