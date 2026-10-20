@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Sequence
+from urllib.parse import unquote
 
 import pymupdf
 import pikepdf
@@ -261,7 +262,7 @@ class _Scanner:
         placeholder_patterns.extend(
             (
                 re.compile(r"【[^】]*】"),
-                re.compile(r"\bTBD\b", re.IGNORECASE),
+                re.compile(r"\b(?:TODO|TBD)\b", re.IGNORECASE),
             )
         )
         self.placeholder_patterns = tuple(placeholder_patterns)
@@ -717,12 +718,18 @@ class _Scanner:
         location: str,
     ) -> None:
         for element in root.iter():
-            for value in element.attrib.values():
+            for name, value in element.attrib.items():
+                is_relationship_target = (
+                    isinstance(element.tag, str)
+                    and etree.QName(element).localname == "Relationship"
+                    and etree.QName(name).localname == "Target"
+                )
+                scan_value = unquote(value) if is_relationship_target else value
                 self.scan_text(
-                    value,
+                    scan_value,
                     path,
                     location,
-                    scan_profile_patterns=False,
+                    scan_profile_patterns=is_relationship_target,
                 )
 
     def scan_ooxml_metadata(

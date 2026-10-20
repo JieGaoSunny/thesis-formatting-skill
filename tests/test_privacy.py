@@ -209,6 +209,43 @@ def test_scans_docx_hidden_parts_relationships_properties_and_media_names(
     } <= locations
 
 
+def test_scans_uri_encoded_private_values_in_relationship_targets(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "thesis.docx"
+    _write_docx(
+        document,
+        {
+            "word/_rels/document.xml.rels": (
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/'
+                '2006/relationships"><Relationship Id="rId1" '
+                'Type="https://example.test/relationship" '
+                'Target="../media/Secret%20Student-private%40example.test.png"/>'
+                "</Relationships>"
+            ),
+        },
+    )
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    rules = set(_rules(report))
+    assert "PRIVACY.DENYLIST" in rules
+    assert "PRIVACY.PATTERN.EMAIL" in rules
+
+
+@pytest.mark.parametrize("placeholder", ["todo", "tbd"])
+def test_unresolved_placeholders_are_case_insensitive(
+    tmp_path: Path,
+    placeholder: str,
+) -> None:
+    source = tmp_path / "thesis.txt"
+    source.write_text(placeholder, encoding="utf-8")
+
+    report = release_check(source, PROFILE, DENYLIST)
+
+    assert "PRIVACY.UNRESOLVED_PLACEHOLDER" in _rules(report)
+
+
 def test_required_ooxml_entry_names_are_not_treated_as_placeholders(
     tmp_path: Path,
 ) -> None:
