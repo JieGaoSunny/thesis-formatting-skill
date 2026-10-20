@@ -773,6 +773,71 @@ def test_export_rejects_invalid_returned_render_manifest(
     assert str(output) not in captured.out
 
 
+def test_export_rejects_arbitrary_text_manifest(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.txt"
+    source.write_bytes(b"docx")
+
+    def provider(
+        _source: Path, requested_output: Path, requested_manifest: Path
+    ) -> list[Path]:
+        requested_output.write_bytes(b"pdf")
+        requested_manifest.write_text("not a render manifest", encoding="utf-8")
+        return [requested_output, requested_manifest]
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
+        dependencies=cli.CliDependencies(export_document=provider),
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert str(output) not in captured.out
+
+
+def test_export_accepts_valid_json_text_manifest(tmp_path: Path) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.txt"
+    source.write_bytes(b"docx")
+
+    def provider(
+        _source: Path, requested_output: Path, requested_manifest: Path
+    ) -> list[Path]:
+        requested_output.write_bytes(b"pdf")
+        requested_manifest.write_bytes(
+            (
+                ROOT / "tests" / "fixtures" / "contracts" / "render-manifest.json"
+            ).read_bytes()
+        )
+        return [requested_output, requested_manifest]
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
+        dependencies=cli.CliDependencies(export_document=provider),
+    )
+
+    assert result == 0
+
+
 def test_export_accepts_new_pdf_and_manifest_destinations(tmp_path: Path) -> None:
     source = tmp_path / "input.docx"
     output = tmp_path / "output.pdf"

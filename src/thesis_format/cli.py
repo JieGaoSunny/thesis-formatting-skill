@@ -230,15 +230,20 @@ def _require_nonempty_regular_file(path: Path, label: str) -> None:
         )
 
 
+def _validate_render_manifest_file(path: Path) -> None:
+    _require_nonempty_regular_file(path, "render manifest")
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"invalid render manifest: {path}") from error
+    validate_render_manifest(manifest)
+
+
 def _validate_returned_artifacts(paths: Sequence[Path]) -> None:
     for path in paths:
         _require_nonempty_regular_file(path, "provider artifact")
         if path.suffix.lower() == ".json":
-            try:
-                manifest = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeError, json.JSONDecodeError) as error:
-                raise ValueError(f"invalid render manifest: {path}") from error
-            validate_render_manifest(manifest)
+            _validate_render_manifest_file(path)
 
 
 def _is_unresolved(report: Mapping[str, object]) -> bool:
@@ -311,7 +316,7 @@ def _run_export(args: argparse.Namespace, function: ExportFunction | None) -> in
         function(args.source, args.output, args.manifest)
     )
     _require_nonempty_regular_file(args.output, "PDF output")
-    _validate_returned_artifacts((args.manifest,))
+    _validate_render_manifest_file(args.manifest)
     _validate_returned_artifacts(
         tuple(
             path
