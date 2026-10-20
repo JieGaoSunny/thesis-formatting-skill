@@ -126,12 +126,29 @@ def _sha(value: str | bytes) -> str:
 def _pdf_metadata_key_forms(value: str) -> frozenset[str]:
     normalized = unicodedata.normalize("NFC", value).strip().lstrip("/").casefold()
     forms = {normalized}
+    if normalized.startswith("{") and "}" in normalized:
+        forms.add(normalized.rsplit("}", 1)[1])
     for separator in (":", ".", "|"):
         if separator in normalized:
             forms.add(normalized.rsplit(separator, 1)[1])
     if forms & _PDF_CREATOR_ALIASES:
         forms.update(_PDF_CREATOR_ALIASES)
     return frozenset(forms)
+
+
+def _pdf_metadata_key_name(value: str) -> str:
+    normalized = unicodedata.normalize("NFC", value).strip().lstrip("/").casefold()
+    if normalized.startswith("{") and "}" in normalized:
+        return normalized.rsplit("}", 1)[1]
+    for separator in (":", "|"):
+        if separator in normalized:
+            return normalized.rsplit(separator, 1)[1]
+    return normalized
+
+
+def _pdf_metadata_values(value: object) -> tuple[str, ...]:
+    values = value if isinstance(value, (list, set, tuple)) else (value,)
+    return tuple(rendered for item in values if (rendered := str(item).strip()))
 
 
 def _read_denylist(path: Path) -> tuple[tuple[str, str], ...]:
@@ -462,32 +479,47 @@ class _Scanner:
 
     def scan_pdf(self, path: Path, display_path: str) -> None:
         try:
-            metadata: dict[str, str] = {}
+            metadata: list[tuple[str, str]] = []
             with pymupdf.open(path) as document:
-                metadata.update(
-                    {
-                        key.casefold(): str(value)
-                        for key, value in (document.metadata or {}).items()
-                        if value
-                    }
+                metadata.extend(
+                    (key, rendered)
+                    for key, value in (document.metadata or {}).items()
+                    for rendered in _pdf_metadata_values(value)
                 )
                 for page_number, page in enumerate(document, 1):
                     self.scan_text(
                         page.get_text(), display_path, f"page:{page_number}"
                     )
             with pikepdf.open(path) as pdf:
+                if "/Metadata" in pdf.Root:
+                    raw_xmp = pdf.Root.Metadata.read_bytes()
+                    xmp_root = etree.fromstring(
+                        raw_xmp,
+                        parser=etree.XMLParser(resolve_entities=False, no_network=True),
+                    )
+                    if xmp_root.find(
+                        ".//{http://www.w3.org/1999/02/22-rdf-syntax-ns#}RDF"
+                    ) is None:
+                        raise ValueError("PDF metadata stream is not valid XMP")
+                with pdf.open_metadata(update_docinfo=False) as xmp:
+                    metadata.extend(
+                        (str(key), rendered)
+                        for key, value in xmp.items()
+                        for rendered in _pdf_metadata_values(value)
+                    )
                 for key, value in pdf.docinfo.items():
-                    rendered = str(value).strip()
-                    if rendered:
-                        normalized_key = str(key).lstrip("/").casefold()
-                        metadata[normalized_key] = rendered
+                    metadata.extend(
+                        (str(key), rendered)
+                        for rendered in _pdf_metadata_values(value)
+                    )
             forbidden = frozenset(
                 form
                 for key in self.profile.privacy.forbidden_metadata_keys
                 for form in _pdf_metadata_key_forms(key)
             )
-            for key, value in sorted(metadata.items()):
-                location = f"metadata:{key}"
+            for key, value in sorted(metadata):
+                normalized_key = _pdf_metadata_key_name(key)
+                location = f"metadata:{normalized_key}"
                 self.scan_text(value, display_path, location)
                 if _pdf_metadata_key_forms(key) & forbidden:
                     self.add(
@@ -498,7 +530,9 @@ class _Scanner:
                         "Forbidden document metadata was found and redacted.",
                     )
                     continue
-                if key == "author" and _normalized(value) != _normalized(
+                if normalized_key in {"author", "creator"} and _normalized(
+                    value
+                ) != _normalized(
                     self.profile.privacy.fictional_values.author
                 ):
                     self.add(
@@ -508,7 +542,13 @@ class _Scanner:
                         value,
                         "A non-fictional identity value was found.",
                     )
-        except (OSError, RuntimeError, ValueError, pikepdf.PdfError):
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            etree.XMLSyntaxError,
+            pikepdf.PdfError,
+        ):
             self.unreadable(path, display_path, "pdf")
 
     def scan(self) -> None:

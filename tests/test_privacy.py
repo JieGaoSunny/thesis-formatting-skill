@@ -10,6 +10,7 @@ import fitz
 import pikepdf
 import pytest
 import yaml
+from pikepdf.models.metadata import PdfMetadata
 
 from thesis_format import cli
 from thesis_format.contracts import validate_privacy_report
@@ -71,6 +72,35 @@ def _write_pdf_metadata(path: Path, key: str, value: str) -> None:
     document.add_blank_page()
     document.docinfo[pikepdf.Name(key)] = value
     document.save(path)
+
+
+def _write_pdf_xmp(
+    path: Path,
+    key: str,
+    value: str | list[str],
+) -> None:
+    PdfMetadata.register_xml_namespace(
+        "https://example.test/privacy-metadata/1.0/",
+        "privacytest",
+    )
+    document = pikepdf.Pdf.new()
+    document.add_blank_page()
+    with document.open_metadata(
+        set_pikepdf_as_editor=False,
+        update_docinfo=False,
+    ) as metadata:
+        metadata[key] = value
+    document.save(path)
+
+
+def _write_pdf_with_malformed_xmp(path: Path) -> None:
+    document = pikepdf.Pdf.new()
+    document.add_blank_page()
+    metadata = pikepdf.Stream(document, b"<x:xmpmeta><broken>")
+    metadata.Type = pikepdf.Name.Metadata
+    metadata.Subtype = pikepdf.Name.XML
+    document.Root.Metadata = metadata
+    document.save(path, fix_metadata_version=False)
 
 
 def test_denylist_is_literal_casefolded_nfc_and_normalizes_path_separators(
@@ -316,6 +346,83 @@ def test_pdf_forbidden_metadata_keys_are_casefolded_aliased_and_redacted(
     )
     assert private_value not in json.dumps(report, ensure_ascii=False)
     assert private_value not in markdown
+
+
+@pytest.mark.parametrize(
+    ("configured_key", "xmp_key", "xmp_value", "expected_key", "private_value"),
+    [
+        (
+            "creator",
+            "xmp:CreatorTool",
+            "XMP-only private creator tool",
+            "creatortool",
+            "XMP-only private creator tool",
+        ),
+        (
+            "creator",
+            "dc:creator",
+            ["XMP-only private author"],
+            "creator",
+            "XMP-only private author",
+        ),
+        (
+            "producer",
+            "pdf:Producer",
+            "XMP-only private producer",
+            "producer",
+            "XMP-only private producer",
+        ),
+        (
+            "customowner",
+            "privacytest:CustomOwner",
+            "XMP-only private custom owner",
+            "customowner",
+            "XMP-only private custom owner",
+        ),
+    ],
+)
+def test_pdf_xmp_only_forbidden_metadata_is_normalized_redacted_and_does_not_leak(
+    tmp_path: Path,
+    configured_key: str,
+    xmp_key: str,
+    xmp_value: str | list[str],
+    expected_key: str,
+    private_value: str,
+) -> None:
+    pdf = tmp_path / "xmp-only.pdf"
+    _write_pdf_xmp(pdf, xmp_key, xmp_value)
+    profile = _profile_with_forbidden_keys(tmp_path, configured_key)
+
+    with pikepdf.open(pdf) as document:
+        assert not document.docinfo
+
+    report = release_check(pdf, profile, DENYLIST)
+    markdown = render_privacy_markdown(report)
+
+    metadata_findings = [
+        finding
+        for finding in report["findings"]  # type: ignore[index]
+        if finding["rule_id"] == "PRIVACY.METADATA"
+    ]
+    assert len(metadata_findings) == 1
+    assert metadata_findings[0]["location"] == f"metadata:{expected_key}"
+    assert private_value not in json.dumps(report, ensure_ascii=False)
+    assert private_value not in markdown
+
+
+def test_malformed_pdf_xmp_fails_closed_as_unreadable(tmp_path: Path) -> None:
+    pdf = tmp_path / "malformed-xmp.pdf"
+    _write_pdf_with_malformed_xmp(pdf)
+
+    report = release_check(pdf, PROFILE, DENYLIST)
+
+    unreadable = [
+        finding
+        for finding in report["findings"]  # type: ignore[index]
+        if finding["rule_id"] == "PRIVACY.UNREADABLE"
+    ]
+    assert len(unreadable) == 1
+    assert unreadable[0]["location"] == "pdf"
 
 
 def test_detects_generic_private_values_fictional_mismatches_and_placeholders(
