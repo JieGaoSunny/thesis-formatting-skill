@@ -1,0 +1,17 @@
+{
+  "page_count": 3,
+  "page_dimensions": {
+    "width_pt": 300.0,
+    "height_pt": 400.0
+  },
+  "destination_pages": {
+    "demo_appendix": 3,
+    "demo_body": 2,
+    "demo_cover": 1
+  },
+  "page_numbers": [
+    1,
+    2,
+    3
+  ]
+}

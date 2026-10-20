@@ -23,7 +23,7 @@ PDF_FIXTURE = ROOT / "tests" / "fixtures" / "contracts" / "render-output.pdf"
 
 def test_cli_version() -> None:
     result = subprocess.run(
-        ["uv", "run", "thesis-format", "--version"],
+        [sys.executable, "-m", "thesis_format", "--version"],
         check=True,
         capture_output=True,
         text=True,
@@ -358,22 +358,6 @@ def test_missing_input_is_invalid_input_exit_2(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("command", "arguments", "message"),
     (
-        (
-            "export",
-            (
-                "input.docx",
-                "--output",
-                "output.pdf",
-                "--manifest",
-                "render-manifest.json",
-            ),
-            "thesis_format.render.export_document",
-        ),
-        (
-            "preview",
-            ("input.docx", "--output-dir", "preview"),
-            "thesis_format.render.preview_pdf",
-        ),
         (
             "release-check",
             (

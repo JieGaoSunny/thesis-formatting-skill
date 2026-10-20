@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "renderer": {
+    "name": "LibreOffice",
+    "version": "26.8.1.1",
+    "image_digest": null
+  },
+  "canonical_container_status": "pending-release-ci",
+  "locale": "zh_CN.UTF-8",
+  "timezone": "UTC",
+  "soffice_path": "soffice",
+  "timeout_seconds": 120,
+  "local_verification": {
+    "platform": "macOS",
+    "soffice_path": "/opt/homebrew/bin/soffice",
+    "libreoffice_version": "26.8.1.1 bf6ef2662401c7d6dce671ab4deb26ee0af3a7c1",
+    "pdftoppm_version": "26.03.0",
+    "locale_observed": "C.UTF-8",
+    "verified_at": "2026-10-21T02:39:47+08:00"
+  },
+  "release_ci_instructions": "Build Dockerfile.render, publish the immutable image, then replace renderer.image_digest with the registry-reported sha256 digest before accepting canonical artifacts."
+}
