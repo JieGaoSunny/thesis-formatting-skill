@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,19 +27,64 @@ _LIGHT_GREEN = "#DCEBD8"
 _GOLD = "#D99B2B"
 _BLUE = "#4B78A8"
 _LIGHT_BLUE = "#DFEAF5"
+_FONT_ENV = "THESIS_FIGURE_FONT"
+_KNOWN_CJK_FONT_PATHS = (
+    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf"),
+    Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+    Path("/opt/homebrew/share/fonts/NotoSansCJK-Regular.ttc"),
+    Path("/Library/Fonts/NotoSansCJK-Regular.ttc"),
+)
 
 
-def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    candidates = (
-        Path("/System/Library/Fonts/PingFang.ttc"),
-        Path("/System/Library/Fonts/STHeiti Light.ttc"),
-        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+class FigureFontError(RuntimeError):
+    """Raised when figure generation cannot load a verified CJK font."""
+
+
+def _supports_chinese(font: ImageFont.FreeTypeFont) -> bool:
+    missing = bytes(font.getmask("\u0378"))
+    return all(
+        font.getmask(character).getbbox() is not None
+        and bytes(font.getmask(character)) != missing
+        for character in "树冠叶"
     )
+
+
+def resolve_cjk_font(
+    font_path: str | Path | None = None, *, size: int = 32
+) -> ImageFont.FreeTypeFont:
+    """Resolve an explicit or canonical Noto CJK font and verify its glyphs."""
+
+    configured = font_path or os.environ.get(_FONT_ENV)
+    candidates = (Path(configured).expanduser(),) if configured else _KNOWN_CJK_FONT_PATHS
     for candidate in candidates:
-        if candidate.exists():
-            return ImageFont.truetype(str(candidate), size=size, index=0)
-    return ImageFont.load_default()
+        if not candidate.is_file():
+            if configured:
+                raise FigureFontError(
+                    f"Configured CJK figure font does not exist: {candidate}. "
+                    f"Pass font_path or set {_FONT_ENV} to a CJK font file."
+                )
+            continue
+        try:
+            font = ImageFont.truetype(str(candidate), size=size, index=0)
+        except OSError as exc:
+            raise FigureFontError(
+                f"Unable to load CJK figure font {candidate}: {exc}"
+            ) from exc
+        if not _supports_chinese(font):
+            raise FigureFontError(
+                f"Figure font {candidate} does not provide the required Chinese glyphs."
+            )
+        return font
+    searched = ", ".join(str(path) for path in _KNOWN_CJK_FONT_PATHS)
+    raise FigureFontError(
+        "No CJK figure font found. Pass font_path or set "
+        f"{_FONT_ENV}; canonical Noto paths searched: {searched or '(none)'}."
+    )
+
+
+def _font(font_path: Path, size: int) -> ImageFont.FreeTypeFont:
+    return resolve_cjk_font(font_path, size=size)
 
 
 def _centered_text(
@@ -64,12 +110,12 @@ def _save(image: Image.Image, path: Path, description: str) -> None:
     image.save(path, format="PNG", compress_level=9, optimize=False, pnginfo=metadata)
 
 
-def _draw_crown_sampling(path: Path) -> None:
+def _draw_crown_sampling(path: Path, font_path: Path) -> None:
     image = Image.new("RGB", (_WIDTH, _HEIGHT), "white")
     draw = ImageDraw.Draw(image)
-    title_font = _font(58)
-    label_font = _font(38)
-    small_font = _font(30)
+    title_font = _font(font_path, 58)
+    label_font = _font(font_path, 38)
+    small_font = _font(font_path, 30)
 
     _centered_text(draw, (900, 70), "树冠分层与方位抽样示意图（模拟）", title_font)
     draw.line((900, 180, 900, 1060), fill="#795548", width=38)
@@ -130,12 +176,12 @@ def _draw_crown_sampling(path: Path) -> None:
     )
 
 
-def _draw_workflow(path: Path) -> None:
+def _draw_workflow(path: Path, font_path: Path) -> None:
     image = Image.new("RGB", (_WIDTH, _HEIGHT), "white")
     draw = ImageDraw.Draw(image)
-    title_font = _font(58)
-    label_font = _font(35)
-    small_font = _font(29)
+    title_font = _font(font_path, 58)
+    label_font = _font(font_path, 35)
+    small_font = _font(font_path, 29)
 
     _centered_text(draw, (900, 70), "单株叶片数量估算流程（模拟）", title_font)
     boxes = (
@@ -173,7 +219,7 @@ def _draw_workflow(path: Path) -> None:
         "重复抽样差异",
         "遮挡校正不确定性",
         "分层权重敏感性",
-        "置信区间与适用范围",
+        "敏感性区间与适用范围",
     )
     for index, text in enumerate(items):
         x = 470 + (index % 2) * 560
@@ -190,13 +236,18 @@ def _draw_workflow(path: Path) -> None:
     )
 
 
-def generate_demo_figures(output_dir: str | Path = "build/demo-assets") -> tuple[Path, Path]:
+def generate_demo_figures(
+    output_dir: str | Path = "build/demo-assets",
+    *,
+    font_path: str | Path | None = None,
+) -> tuple[Path, Path]:
     """Generate both original PNG figures and return their paths."""
 
+    resolved_font = Path(resolve_cjk_font(font_path, size=32).path)
     directory = Path(output_dir).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     crown_path = directory / "crown-layer-sampling.png"
     workflow_path = directory / "leaf-count-estimation-workflow.png"
-    _draw_crown_sampling(crown_path)
-    _draw_workflow(workflow_path)
+    _draw_crown_sampling(crown_path, resolved_font)
+    _draw_workflow(workflow_path, resolved_font)
     return crown_path, workflow_path

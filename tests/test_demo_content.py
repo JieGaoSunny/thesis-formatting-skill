@@ -6,20 +6,27 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw
 
 from thesis_format.demo import (
     Appendix,
     Chapter,
+    DEFAULT_SCALE_INPUTS,
     Figure,
+    FigureFontError,
     Paragraph,
     Reference,
+    SIMULATED_OBSERVATIONS,
     Section,
     Table,
     Thesis,
     build_demo_thesis,
+    calculate_reported_statistics,
     generate_demo_figures,
+    resolve_cjk_font,
+    sensitivity_envelope,
 )
+from thesis_format.demo import figures as demo_figures
 
 
 def _all_paragraph_text(thesis: Thesis) -> str:
@@ -123,6 +130,57 @@ def test_tables_are_rectangular_and_marked_as_simulated() -> None:
         assert "模拟" in table.note
 
 
+def test_appendix_contains_complete_observations_and_scale_inputs() -> None:
+    thesis = build_demo_thesis()
+    tables = {table.number: table for table in thesis.appendix.tables}
+
+    assert len(SIMULATED_OBSERVATIONS) == 18
+    assert len(
+        {(row.round_id, row.quadrat_id) for row in SIMULATED_OBSERVATIONS}
+    ) == 18
+    assert len(tables["表 A-2"].rows) == 18
+    assert tables["表 A-3"].rows == (
+        ("单样方面积/m²", "0.25"),
+        ("整株等效尺度/m²", "11.0048691418"),
+        ("模拟真值/片", "4320"),
+        ("上层权重/可见比例", "0.24 / 0.91"),
+        ("中层权重/可见比例", "0.46 / 0.82"),
+        ("下层权重/可见比例", "0.30 / 0.88"),
+        ("变异系数标准差", "样本标准差（n-1）"),
+    )
+
+
+def test_reported_estimates_biases_cvs_and_sensitivity_are_recomputed() -> None:
+    statistics = calculate_reported_statistics(
+        SIMULATED_OBSERVATIONS, DEFAULT_SCALE_INPUTS
+    )
+
+    assert statistics["simple"].rounded_estimate == 4018
+    assert statistics["simple"].bias_percent == pytest.approx(-6.99, abs=0.01)
+    assert statistics["simple"].cv_percent == pytest.approx(5.8, abs=0.05)
+    assert statistics["stratified"].rounded_estimate == 4172
+    assert statistics["stratified"].bias_percent == pytest.approx(-3.42, abs=0.01)
+    assert statistics["stratified"].cv_percent == pytest.approx(4.2, abs=0.05)
+    assert statistics["corrected"].rounded_estimate == 4286
+    assert statistics["corrected"].bias_percent == pytest.approx(-0.79, abs=0.01)
+    assert statistics["corrected"].cv_percent == pytest.approx(3.1, abs=0.05)
+    assert sensitivity_envelope(
+        SIMULATED_OBSERVATIONS, DEFAULT_SCALE_INPUTS
+    ).rounded_bounds == (4242, 4330)
+
+    thesis = build_demo_thesis()
+    thesis_text = "\n".join(
+        (
+            _all_paragraph_text(thesis),
+            *(cell for table in thesis.tables for row in table.rows for cell in row),
+        )
+    )
+    for reported in ("4018", "4172", "4286", "5.8%", "4.2%", "3.1%", "4242", "4330"):
+        assert reported in thesis_text
+    assert "敏感性区间" in thesis_text
+    assert "置信区间" not in thesis_text
+
+
 def test_figures_have_chinese_labels_and_accessible_alt_text() -> None:
     thesis = build_demo_thesis()
 
@@ -131,12 +189,48 @@ def test_figures_have_chinese_labels_and_accessible_alt_text() -> None:
     assert all(len(figure.alt_text) >= 20 for figure in thesis.figures)
 
 
+def _available_cjk_font() -> Path:
+    candidates = (
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf"),
+        Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+        Path("/opt/homebrew/share/fonts/NotoSansCJK-Regular.ttc"),
+        Path("/Library/Fonts/NotoSansCJK-Regular.ttc"),
+        Path("/System/Library/Fonts/PingFang.ttc"),
+        Path("/System/Library/Fonts/Hiragino Sans GB.ttc"),
+        Path("/System/Library/Fonts/STHeiti Medium.ttc"),
+    )
+    return next(path for path in candidates if path.is_file())
+
+
+def test_resolved_font_renders_chinese_differently_from_missing_glyph() -> None:
+    font = resolve_cjk_font(_available_cjk_font(), size=48)
+    chinese = Image.new("L", (200, 80))
+    missing = Image.new("L", (200, 80))
+    ImageDraw.Draw(chinese).text((0, 0), "树冠", font=font, fill=255)
+    ImageDraw.Draw(missing).text((0, 0), "\u0378\u0378", font=font, fill=255)
+
+    assert chinese.getbbox() is not None
+    assert ImageChops.difference(chinese, missing).getbbox() is not None
+
+
+def test_missing_cjk_font_raises_clear_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("THESIS_FIGURE_FONT", raising=False)
+    monkeypatch.setattr(demo_figures, "_KNOWN_CJK_FONT_PATHS", ())
+
+    with pytest.raises(FigureFontError, match="THESIS_FIGURE_FONT"):
+        resolve_cjk_font()
+
+
 def test_demo_figures_are_deterministic_pngs(tmp_path: Path) -> None:
     first = tmp_path / "first"
     second = tmp_path / "second"
+    font_path = _available_cjk_font()
 
-    first_paths = generate_demo_figures(first)
-    second_paths = generate_demo_figures(second)
+    first_paths = generate_demo_figures(first, font_path=font_path)
+    second_paths = generate_demo_figures(second, font_path=font_path)
 
     assert [path.name for path in first_paths] == [
         "crown-layer-sampling.png",
@@ -159,6 +253,6 @@ def test_default_figure_output_is_under_build_demo_assets(
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    paths = generate_demo_figures()
+    paths = generate_demo_figures(font_path=_available_cjk_font())
 
     assert all(path.parent == tmp_path / "build" / "demo-assets" for path in paths)
