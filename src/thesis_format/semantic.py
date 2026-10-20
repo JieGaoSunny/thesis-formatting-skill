@@ -119,6 +119,13 @@ class _Evidence:
     source: str
 
 
+@dataclass(frozen=True, slots=True)
+class _StyleMetadata:
+    name: str | None
+    based_on: str | None
+    outline_level: int | None
+
+
 def _text(element: etree._Element) -> str:
     return "".join(element.xpath(".//w:t/text()", namespaces=NS))
 
@@ -180,17 +187,51 @@ def _style_id(element: etree._Element) -> str | None:
     return values[0] if values else None
 
 
-def _style_map(package: OoxmlPackage) -> dict[str, str | None]:
+def _style_metadata(package: OoxmlPackage) -> dict[str, _StyleMetadata]:
     if "word/styles.xml" not in package.parts:
         return {}
-    result: dict[str, str | None] = {}
+    result: dict[str, _StyleMetadata] = {}
     for style in package.xml("word/styles.xml").xpath(".//w:style", namespaces=NS):
         style_id = style.get(f"{{{W_NS}}}styleId")
         if not style_id:
             continue
         names = style.xpath("./w:name/@w:val", namespaces=NS)
-        result[style_id] = names[0] if names else None
+        based_on = style.xpath("./w:basedOn/@w:val", namespaces=NS)
+        outline_levels = style.xpath(
+            "./w:pPr/w:outlineLvl/@w:val", namespaces=NS
+        )
+        try:
+            outline_level = (
+                int(outline_levels[0]) if outline_levels else None
+            )
+        except ValueError:
+            outline_level = None
+        result[style_id] = _StyleMetadata(
+            name=names[0] if names else None,
+            based_on=based_on[0] if based_on else None,
+            outline_level=outline_level,
+        )
     return result
+
+
+def _style_map(package: OoxmlPackage) -> dict[str, str | None]:
+    return {
+        style_id: metadata.name
+        for style_id, metadata in _style_metadata(package).items()
+    }
+
+
+def _style_chain(
+    style_id: str | None,
+    styles: dict[str, _StyleMetadata],
+) -> tuple[str, ...]:
+    result: list[str] = []
+    current = style_id
+    while current and current not in result:
+        result.append(current)
+        metadata = styles.get(current)
+        current = metadata.based_on if metadata else None
+    return tuple(result)
 
 
 def _relationship_map(
@@ -238,6 +279,83 @@ def _mapped_style_role(
     return None
 
 
+def _resolved_style_role(
+    style_id: str | None,
+    styles: dict[str, _StyleMetadata],
+    profile: FormatProfile,
+) -> str | None:
+    for candidate_id in _style_chain(style_id, styles):
+        metadata = styles.get(candidate_id)
+        role = _mapped_style_role(
+            candidate_id,
+            metadata.name if metadata else None,
+            profile,
+        )
+        if role is not None:
+            return role
+    return None
+
+
+def _outline_role(
+    element: etree._Element,
+    style_id: str | None,
+    styles: dict[str, _StyleMetadata],
+) -> str | None:
+    values = element.xpath("./w:pPr/w:outlineLvl/@w:val", namespaces=NS)
+    level: int | None = None
+    if values:
+        try:
+            level = int(values[0])
+        except ValueError:
+            return None
+    else:
+        for candidate_id in _style_chain(style_id, styles):
+            metadata = styles.get(candidate_id)
+            if metadata and metadata.outline_level is not None:
+                level = metadata.outline_level
+                break
+    return {0: "heading_1", 1: "heading_2", 2: "heading_3"}.get(level)
+
+
+def _numbering_style_map(
+    package: OoxmlPackage,
+) -> dict[tuple[str, int], str]:
+    if "word/numbering.xml" not in package.parts:
+        return {}
+    root = package.xml("word/numbering.xml")
+    abstract_by_num: dict[str, str] = {}
+    for numbering in root.xpath("./w:num", namespaces=NS):
+        num_id = numbering.get(f"{{{W_NS}}}numId")
+        abstract_ids = numbering.xpath(
+            "./w:abstractNumId/@w:val", namespaces=NS
+        )
+        if num_id and abstract_ids:
+            abstract_by_num[num_id] = abstract_ids[0]
+
+    result: dict[tuple[str, int], str] = {}
+    for abstract in root.xpath("./w:abstractNum", namespaces=NS):
+        abstract_id = abstract.get(f"{{{W_NS}}}abstractNumId")
+        if not abstract_id:
+            continue
+        num_ids = [
+            num_id
+            for num_id, candidate_id in abstract_by_num.items()
+            if candidate_id == abstract_id
+        ]
+        for level in abstract.xpath("./w:lvl", namespaces=NS):
+            raw_level = level.get(f"{{{W_NS}}}ilvl")
+            style_ids = level.xpath("./w:pStyle/@w:val", namespaces=NS)
+            if raw_level is None or not style_ids:
+                continue
+            try:
+                level_index = int(raw_level)
+            except ValueError:
+                continue
+            for num_id in num_ids:
+                result[(num_id, level_index)] = style_ids[0]
+    return result
+
+
 def _bookmark_roles(bookmarks: tuple[str, ...]) -> set[str]:
     normalized = {
         bookmark.removeprefix("thesis-role-")
@@ -259,7 +377,9 @@ def _field_roles(fields: tuple[str, ...]) -> set[str]:
     return roles
 
 
-def _numbering_role(element: etree._Element) -> str | None:
+def _numbering_details(
+    element: etree._Element,
+) -> tuple[str, int, str] | None:
     num_ids = element.xpath("./w:pPr/w:numPr/w:numId/@w:val", namespaces=NS)
     if not num_ids or num_ids[0] == "0":
         return None
@@ -268,18 +388,43 @@ def _numbering_role(element: etree._Element) -> str | None:
         level = int(levels[0]) if levels else 0
     except ValueError:
         return None
-    return {0: "heading_1", 1: "heading_2", 2: "heading_3"}.get(level)
+    role = {0: "heading_1", 1: "heading_2", 2: "heading_3"}.get(level)
+    return (num_ids[0], level, role) if role is not None else None
 
 
 def _explicit_role(
     element: etree._Element,
     fields: tuple[str, ...],
     bookmarks: tuple[str, ...],
+    *,
+    style_role: str | None,
+    outline_role: str | None,
+    pattern_roles: set[str],
+    numbering_styles: dict[tuple[str, int], str],
+    styles: dict[str, _StyleMetadata],
+    profile: FormatProfile,
 ) -> tuple[str | None, bool]:
     candidates = _field_roles(fields) | _bookmark_roles(bookmarks)
-    numbering_role = _numbering_role(element)
-    if numbering_role is not None:
-        candidates.add(numbering_role)
+    numbering = _numbering_details(element)
+    if numbering is not None:
+        num_id, level, numbering_role = numbering
+        numbering_style_id = numbering_styles.get((num_id, level))
+        numbering_style_role = _resolved_style_role(
+            numbering_style_id,
+            styles,
+            profile,
+        )
+        corroborating_roles = {
+            role
+            for role in (
+                style_role,
+                outline_role,
+                numbering_style_role,
+            )
+            if role is not None
+        } | pattern_roles
+        if numbering_role in corroborating_roles:
+            candidates.add(numbering_role)
     if len(candidates) > 1:
         return None, True
     return (next(iter(candidates)), False) if candidates else (None, False)
@@ -387,7 +532,12 @@ def _resolve_paragraphs(
     package: OoxmlPackage,
     profile: FormatProfile,
 ) -> tuple[SemanticParagraph, ...]:
-    styles = _style_map(package)
+    style_metadata = _style_metadata(package)
+    styles = {
+        style_id: metadata.name
+        for style_id, metadata in style_metadata.items()
+    }
+    numbering_styles = _numbering_style_map(package)
     relationships = package.relationships()
     relationship_by_id = _relationship_map(relationships)
     markers = _marker_positions(elements, styles, profile)
@@ -405,19 +555,35 @@ def _resolve_paragraphs(
         evidence: list[_Evidence] = []
         warnings: list[str] = []
 
-        style_role = _mapped_style_role(style_id, style_name, profile)
+        style_role = _resolved_style_role(
+            style_id,
+            style_metadata,
+            profile,
+        )
         if style_role in AUTOMATIC_ROLES:
             evidence.append(_Evidence(style_role, "word_style"))
 
+        pattern_roles = _pattern_roles(text, profile)
         explicit_role, explicit_conflict = _explicit_role(
-            element, fields, bookmarks
+            element,
+            fields,
+            bookmarks,
+            style_role=style_role,
+            outline_role=_outline_role(
+                element,
+                style_id,
+                style_metadata,
+            ),
+            pattern_roles=pattern_roles,
+            numbering_styles=numbering_styles,
+            styles=style_metadata,
+            profile=profile,
         )
         if explicit_conflict:
             warnings.append("ROLE.CONFLICT")
         elif explicit_role:
             evidence.append(_Evidence(explicit_role, "explicit_structure"))
 
-        pattern_roles = _pattern_roles(text, profile)
         if len(pattern_roles) > 1:
             warnings.append("ROLE.AMBIGUOUS")
         elif pattern_roles:

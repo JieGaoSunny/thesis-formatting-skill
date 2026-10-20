@@ -46,6 +46,13 @@ def _set_numbering(paragraph, level: int = 0, num_id: int = 1) -> None:
     p_pr.append(num_pr)
 
 
+def _set_outline_level(paragraph, level: int) -> None:
+    p_pr = paragraph._p.get_or_add_pPr()
+    outline_level = OxmlElement("w:outlineLvl")
+    outline_level.set(qn("w:val"), str(level))
+    p_pr.append(outline_level)
+
+
 def _write_deterministic_entry(
     archive: ZipFile, name: str, data: bytes, template: ZipInfo | None = None
 ) -> None:
@@ -111,6 +118,9 @@ def build_docx(
         numbering_level = item.get("numbering_level")
         if numbering_level is not None:
             _set_numbering(paragraph, int(numbering_level))
+        outline_level = item.get("outline_level")
+        if outline_level is not None:
+            _set_outline_level(paragraph, int(outline_level))
         if item.get("section_break"):
             document.add_section(WD_SECTION.NEW_PAGE)
 

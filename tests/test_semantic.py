@@ -6,6 +6,7 @@ from types import MappingProxyType
 from zipfile import ZipFile
 
 import pytest
+from lxml import etree
 
 from thesis_format.ooxml import OoxmlError, OoxmlPackage, parse_xml
 from thesis_format.profile import RoleDetection, TextPattern, load_profile
@@ -39,6 +40,59 @@ def replace_zip_part(path: Path, part_name: str, replacement: bytes) -> None:
                 else source.read(info.filename),
             )
     rewritten.replace(path)
+
+
+def link_numbering_level_to_style(
+    path: Path,
+    *,
+    num_id: str,
+    level: int,
+    style_id: str,
+) -> None:
+    with ZipFile(path) as archive:
+        numbering = etree.fromstring(archive.read("word/numbering.xml"))
+    namespaces = {
+        "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    }
+    word = f"{{{namespaces['w']}}}"
+    abstract_ids = numbering.xpath(
+        f"./w:num[@w:numId='{num_id}']/w:abstractNumId/@w:val",
+        namespaces=namespaces,
+    )
+    assert abstract_ids
+    abstract = numbering.xpath(
+        f"./w:abstractNum[@w:abstractNumId='{abstract_ids[0]}']",
+        namespaces=namespaces,
+    )[0]
+    levels = abstract.xpath(
+        f"./w:lvl[@w:ilvl='{level}']",
+        namespaces=namespaces,
+    )
+    if levels:
+        level_element = levels[0]
+    else:
+        level_element = etree.SubElement(
+            abstract,
+            f"{word}lvl",
+            {f"{word}ilvl": str(level)},
+        )
+    for existing in level_element.xpath("./w:pStyle", namespaces=namespaces):
+        level_element.remove(existing)
+    etree.SubElement(
+        level_element,
+        f"{word}pStyle",
+        {f"{word}val": style_id},
+    )
+    replace_zip_part(
+        path,
+        "word/numbering.xml",
+        etree.tostring(
+            numbering,
+            xml_declaration=True,
+            encoding="UTF-8",
+            standalone=True,
+        ),
+    )
 
 
 def test_semantic_document_and_nodes_are_immutable_and_one_based() -> None:
@@ -75,7 +129,11 @@ def test_explicit_fields_bookmarks_and_numbering_are_enumerated(
                 "field": " SEQ Figure \\* ARABIC ",
                 "bookmark": "demo_figure",
             },
-            {"text": "Numbered heading", "numbering_level": 1},
+            {
+                "text": "Numbered heading",
+                "numbering_level": 1,
+                "outline_level": 1,
+            },
         ],
     )
     document = inspect_document(path, PROFILE)
@@ -86,6 +144,105 @@ def test_explicit_fields_bookmarks_and_numbering_are_enumerated(
     assert caption.bookmarks == ("demo_figure",)
     assert heading.role == "heading_2"
     assert heading.role_source == "explicit_structure"
+
+
+@pytest.mark.parametrize("numbering_level", [0, 1])
+def test_ordinary_numbered_list_is_not_classified_as_heading(
+    tmp_path: Path,
+    numbering_level: int,
+) -> None:
+    path = build_docx(
+        tmp_path / f"ordinary-list-{numbering_level}.docx",
+        [
+            {
+                "text": "Ordinary numbered list item",
+                "numbering_level": numbering_level,
+            }
+        ],
+    )
+    node = inspect_document(path, PROFILE).paragraphs[0]
+    assert node.role is None
+    assert node.repairable is False
+
+
+def test_numbering_with_matching_anchored_pattern_is_explicit_heading(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "pattern-numbered-heading.docx",
+        [
+            {"text": "第一章 正文"},
+            {"text": "1.1 Genuine heading", "numbering_level": 1},
+        ],
+    )
+    node = inspect_document(path, PROFILE).paragraphs[-1]
+    assert (node.role, node.role_source) == (
+        "heading_2",
+        "explicit_structure",
+    )
+    assert node.repairable is True
+
+
+def test_numbering_at_wrong_hierarchy_does_not_conflict_with_heading_pattern(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "mismatched-numbered-heading.docx",
+        [
+            {"text": "第一章 正文"},
+            {"text": "1.1 Genuine heading", "numbering_level": 0},
+        ],
+    )
+    node = inspect_document(path, PROFILE).paragraphs[-1]
+    assert (node.role, node.role_source) == ("heading_2", "text_pattern")
+    assert node.repairable is True
+
+
+def test_numbering_with_matching_outline_level_is_explicit_heading(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "outline-numbered-heading.docx",
+        [
+            {"text": "第一章 正文"},
+            {
+                "text": "Genuine numbered heading",
+                "numbering_level": 1,
+                "outline_level": 1,
+            },
+        ],
+    )
+    node = inspect_document(path, PROFILE).paragraphs[-1]
+    assert (node.role, node.role_source) == (
+        "heading_2",
+        "explicit_structure",
+    )
+    assert node.repairable is True
+
+
+def test_numbering_level_style_metadata_can_confirm_heading(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "numbering-style-heading.docx",
+        [
+            {"text": "第一章 正文"},
+            {"text": "Style declaration", "style": "AppleHeading2"},
+            {"text": "Metadata-confirmed heading", "numbering_level": 1},
+        ],
+    )
+    link_numbering_level_to_style(
+        path,
+        num_id="1",
+        level=1,
+        style_id="AppleHeading2",
+    )
+    node = inspect_document(path, PROFILE).paragraphs[-1]
+    assert (node.role, node.role_source) == (
+        "heading_2",
+        "explicit_structure",
+    )
+    assert node.repairable is True
 
 
 def test_multiple_complex_fields_are_enumerated_separately_in_order(
