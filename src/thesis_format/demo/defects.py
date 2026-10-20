@@ -35,6 +35,12 @@ def _style(document: Document, name: str):
     return document.styles[name]
 
 
+def _ordered(parent, child) -> None:
+    from thesis_format.demo.build import _insert_by_schema_order
+
+    _insert_by_schema_order(parent, child)
+
+
 def wrong_paper_size(source: str | Path, output: str | Path) -> Path:
     document, destination = _open(source, output)
     for section in document.sections:
@@ -57,7 +63,7 @@ def wrong_section_start(source: str | Path, output: str | Path) -> Path:
         section_type = document.sections[1]._sectPr.find(qn("w:type"))
         if section_type is None:
             section_type = OxmlElement("w:type")
-            document.sections[1]._sectPr.insert(0, section_type)
+            _ordered(document.sections[1]._sectPr, section_type)
         section_type.set(qn("w:val"), "continuous")
     return _save(document, destination)
 
@@ -68,7 +74,7 @@ def mixed_fonts(source: str | Path, output: str | Path) -> Path:
     fonts = style.element.get_or_add_rPr().find(qn("w:rFonts"))
     if fonts is None:
         fonts = OxmlElement("w:rFonts")
-        style.element.get_or_add_rPr().append(fonts)
+        _ordered(style.element.get_or_add_rPr(), fonts)
     fonts.set(qn("w:ascii"), "Arial")
     fonts.set(qn("w:hAnsi"), "Times New Roman")
     fonts.set(qn("w:eastAsia"), "SimSun")
@@ -92,7 +98,7 @@ def unreliable_heading_styles(source: str | Path, output: str | Path) -> Path:
     style = document.styles.add_style("UnreliableHeading", WD_STYLE_TYPE.PARAGRAPH)
     outline = OxmlElement("w:outlineLvl")
     outline.set(qn("w:val"), "1")
-    style.element.get_or_add_pPr().append(outline)
+    _ordered(style.element.get_or_add_pPr(), outline)
     for paragraph in document.paragraphs:
         if paragraph.style.name == "AppleHeading2":
             paragraph.style = style
@@ -162,7 +168,7 @@ def table_border_noise(source: str | Path, output: str | Path) -> Path:
         borders = document.tables[0]._tbl.tblPr.find(qn("w:tblBorders"))
         if borders is None:
             borders = OxmlElement("w:tblBorders")
-            document.tables[0]._tbl.tblPr.append(borders)
+            _ordered(document.tables[0]._tbl.tblPr, borders)
         inside = OxmlElement("w:insideV")
         inside.set(qn("w:val"), "single")
         inside.set(qn("w:sz"), "4")

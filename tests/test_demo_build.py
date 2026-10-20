@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,12 +13,14 @@ from docx.oxml.ns import qn
 
 from thesis_format.audit import audit_document
 from thesis_format.demo.build import build_before, build_template, build_thesis
+from thesis_format.demo.content import build_demo_thesis
 from thesis_format.demo.defects import DEFECTS
 from thesis_format.ooxml import OoxmlPackage
 from thesis_format.profile import load_profile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 PROFILE_PATH = ROOT / "rules" / "apple-university.yaml"
 PROFILE = load_profile(PROFILE_PATH)
 REQUIRED_BOOKMARKS = {
@@ -51,9 +56,226 @@ def _field_codes(path: Path) -> tuple[str, ...]:
     )
 
 
+def _document_xml(path: Path):
+    return OoxmlPackage.open(path).xml("word/document.xml")
+
+
+def _caption_paragraphs(path: Path):
+    root = _document_xml(path)
+    return root.xpath(
+        ".//w:p[w:pPr/w:pStyle[@w:val=$figure or @w:val=$table]]",
+        namespaces={"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"},
+        figure=PROFILE.styles.figure_caption.word_styles[0],
+        table=PROFILE.styles.table_caption.word_styles[0],
+    )
+
+
 def _rule_ids(path: Path) -> list[str]:
     report = audit_document(path, PROFILE)
     return [str(item["rule_id"]) for item in report["findings"]]
+
+
+def _validator_python() -> str:
+    candidates = (
+        os.environ.get("DOCX_VALIDATOR_PYTHON"),
+        sys.executable,
+        shutil.which("python3"),
+        shutil.which("python"),
+    )
+    for candidate in candidates:
+        if candidate and subprocess.run(
+            [candidate, "-c", "import defusedxml"],
+            capture_output=True,
+        ).returncode == 0:
+            return candidate
+    pytest.skip("DOCX validator dependency defusedxml is not installed")
+
+
+def test_complex_fields_use_one_run_per_component_in_iso_order(tmp_path: Path) -> None:
+    output = build_template(tmp_path / "template.docx", PROFILE)
+    package = OoxmlPackage.open(output)
+    stories = [
+        package.xml(name)
+        for name in package.parts
+        if name == "word/document.xml"
+        or re.fullmatch(r"word/(?:header|footer)\d+\.xml", name)
+    ]
+
+    assert stories
+    for story in stories:
+        assert not story.xpath(
+            ".//w:p/w:fldChar | .//w:p/w:instrText | .//w:r[count(w:fldChar | w:instrText | w:t) > 1]",
+            namespaces={"w": W_NS},
+        )
+        for paragraph in story.xpath(".//w:p[.//w:fldChar]", namespaces={"w": W_NS}):
+            components = paragraph.xpath(
+                "./w:r/*[self::w:fldChar or self::w:instrText or self::w:t]",
+                namespaces={"w": W_NS},
+            )
+            tokens = [
+                (
+                    node.get(qn("w:fldCharType"))
+                    if node.tag == qn("w:fldChar")
+                    else "instr"
+                    if node.tag == qn("w:instrText")
+                    else "result"
+                )
+                for node in components
+            ]
+            cursor = 0
+            while cursor < len(tokens):
+                if tokens[cursor] != "begin":
+                    cursor += 1
+                    continue
+                end = tokens.index("end", cursor + 1)
+                assert tokens[cursor : end + 1] == [
+                    "begin",
+                    "instr",
+                    "separate",
+                    "result",
+                    "end",
+                ]
+                cursor = end + 1
+
+
+def test_bookmarks_follow_ppr_and_wrap_paragraph_content(tmp_path: Path) -> None:
+    output = build_template(tmp_path / "template.docx", PROFILE)
+    root = _document_xml(output)
+
+    for paragraph in root.xpath(".//w:p[w:bookmarkStart]", namespaces={"w": W_NS}):
+        children = list(paragraph)
+        p_pr_indexes = [
+            index for index, child in enumerate(children) if child.tag == qn("w:pPr")
+        ]
+        start_index = next(
+            index
+            for index, child in enumerate(children)
+            if child.tag == qn("w:bookmarkStart")
+        )
+        end_index = max(
+            index
+            for index, child in enumerate(children)
+            if child.tag == qn("w:bookmarkEnd")
+        )
+        content_indexes = [
+            index
+            for index, child in enumerate(children)
+            if child.tag in {qn("w:r"), qn("w:hyperlink"), qn("w:fldSimple")}
+        ]
+        assert not p_pr_indexes or p_pr_indexes[0] < start_index
+        assert content_indexes
+        assert start_index < min(content_indexes) <= max(content_indexes) < end_index
+
+
+def test_captions_have_automatic_numbers_and_one_visible_title(
+    tmp_path: Path,
+) -> None:
+    output = build_template(tmp_path / "template.docx", PROFILE)
+    captions = _caption_paragraphs(output)
+
+    assert len(captions) == 2
+    for paragraph in captions:
+        text = "".join(paragraph.xpath(".//w:t/text()", namespaces={"w": W_NS}))
+        literal_text: list[str] = []
+        in_result = False
+        for run in paragraph.xpath("./w:r", namespaces={"w": W_NS}):
+            field_type = run.xpath(
+                "string(w:fldChar/@w:fldCharType)", namespaces={"w": W_NS}
+            )
+            if field_type == "separate":
+                in_result = True
+                continue
+            if field_type == "end":
+                in_result = False
+                continue
+            if not in_result:
+                literal_text.extend(
+                    run.xpath("./w:t/text()", namespaces={"w": W_NS})
+                )
+        codes = [
+            " ".join(value.split())
+            for value in paragraph.xpath(
+                ".//w:instrText/text()", namespaces={"w": W_NS}
+            )
+        ]
+        assert sum(code.startswith("STYLEREF ") for code in codes) == 1
+        assert sum(code.startswith("SEQ ") for code in codes) == 1
+        assert not re.search(r"[图表]\s*\d+-\d+", "".join(literal_text))
+        title = "图题示例" if text.startswith("图") else "表题示例"
+        assert text.count(title) == 1
+
+
+def test_thesis_caption_titles_are_not_duplicated(tmp_path: Path) -> None:
+    model = build_demo_thesis()
+    output = build_thesis(tmp_path / "thesis.docx", PROFILE, model)
+    captions = _caption_paragraphs(output)
+    expected_titles = [
+        figure.caption for figure in model.figures
+    ] + [
+        table.caption for table in (*model.tables, *model.appendix.tables)
+    ]
+    caption_text = [
+        "".join(paragraph.xpath(".//w:t/text()", namespaces={"w": W_NS}))
+        for paragraph in captions
+    ]
+
+    assert len(captions) == len(expected_titles)
+    for title in expected_titles:
+        assert sum(text.count(title) for text in caption_text) == 1
+
+
+@pytest.mark.parametrize("builder", (build_template, build_before))
+def test_generated_docx_passes_external_ooxml_validator(
+    tmp_path: Path,
+    builder,
+) -> None:
+    validator = os.environ.get("DOCX_VALIDATOR")
+    if validator is None:
+        candidate = (
+            Path.home()
+            / ".copilot/skills/docx/scripts/office/validate.py"
+        )
+        if candidate.is_file():
+            validator = str(candidate)
+    if validator is None:
+        pytest.skip("DOCX skill validator is not installed")
+
+    output = builder(tmp_path / f"{builder.__name__}.docx", PROFILE)
+    result = subprocess.run(
+        [_validator_python(), validator, str(output)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_generated_template_survives_libreoffice_roundtrip(tmp_path: Path) -> None:
+    soffice = shutil.which("soffice")
+    if soffice is None:
+        pytest.skip("LibreOffice is not installed")
+
+    output = build_template(tmp_path / "template.docx", PROFILE)
+    converted = tmp_path / "roundtrip"
+    converted.mkdir()
+    result = subprocess.run(
+        [
+            soffice,
+            "--headless",
+            "--convert-to",
+            "docx",
+            "--outdir",
+            str(converted),
+            str(output),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    roundtripped = converted / output.name
+    assert roundtripped.is_file()
+    OoxmlPackage.open(roundtripped)
 
 
 def test_template_is_clean_anonymous_profile_document(tmp_path: Path) -> None:

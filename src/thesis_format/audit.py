@@ -386,7 +386,14 @@ def _style_snapshot(
         "style_id": style_id,
         "role": role,
         "paragraph": {
-            "alignment": _attr(property_value("pPr", "jc"), "val"),
+            "alignment": {
+                "justify": "both",
+                "left": "start",
+                "right": "end",
+            }.get(
+                _attr(property_value("pPr", "jc"), "val"),
+                _attr(property_value("pPr", "jc"), "val"),
+            ),
             "line_spacing": line_spacing,
             "space_before_pt": _pt_from_twips(_attr(spacing, "before")) or 0,
             "space_after_pt": _pt_from_twips(_attr(spacing, "after")) or 0,
@@ -435,7 +442,11 @@ def _expected_style_snapshot(
         "style_id": style_id,
         "role": role,
         "paragraph": {
-            "alignment": style.paragraph.alignment,
+            "alignment": {
+                "justify": "both",
+                "left": "start",
+                "right": "end",
+            }.get(style.paragraph.alignment, style.paragraph.alignment),
             "line_spacing": line_spacing,
             "space_before_pt": style.paragraph.space_before_pt,
             "space_after_pt": style.paragraph.space_after_pt,
