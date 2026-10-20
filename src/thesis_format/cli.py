@@ -101,6 +101,11 @@ def _parser() -> argparse.ArgumentParser:
     exporter.add_argument("source", type=Path)
     exporter.add_argument("--output", "--pdf", dest="output", type=Path, required=True)
     exporter.add_argument("--manifest", type=Path, required=True)
+    exporter.add_argument(
+        "--allow-noncanonical",
+        action="store_true",
+        help="allow a noncanonical local manifest for development only",
+    )
 
     preview = commands.add_parser("preview", help="render PDF preview images")
     preview.add_argument(
@@ -256,6 +261,19 @@ def _validate_render_manifest_file(path: Path) -> Mapping[str, object]:
     return manifest
 
 
+def _is_canonical_render_manifest(manifest: Mapping[str, object]) -> bool:
+    environment = manifest["environment"]
+    return (
+        isinstance(environment, Mapping)
+        and environment["mode"] == "canonical"
+        and environment["canonical"] is True
+    )
+
+
+def _warn_noncanonical(message: str) -> None:
+    print(f"WARNING: {message}", file=sys.stderr)
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -349,6 +367,16 @@ def _run_export(args: argparse.Namespace, function: ExportFunction | None) -> in
             "PDF output SHA-256 does not match render manifest "
             f"raw_pdf_sha256: {args.output}"
         )
+    if not _is_canonical_render_manifest(manifest):
+        if not args.allow_noncanonical:
+            raise ValueError(
+                "noncanonical render manifest rejected; use "
+                "--allow-noncanonical only for explicit local development"
+            )
+        _warn_noncanonical(
+            "accepting noncanonical render manifest for development only; "
+            "it is not suitable for compliance or publication"
+        )
     _validate_returned_artifacts(
         tuple(
             path
@@ -372,6 +400,12 @@ def _run_preview(args: argparse.Namespace, function: PreviewFunction | None) -> 
             else fallback
         )
     _require_file(manifest, "render manifest")
+    manifest_payload = _validate_render_manifest_file(manifest)
+    if not _is_canonical_render_manifest(manifest_payload):
+        _warn_noncanonical(
+            "previewing a noncanonical render manifest; preview output is "
+            "not suitable for compliance or publication"
+        )
     _reject_path_collisions(
         ("source", args.source),
         ("manifest", manifest),

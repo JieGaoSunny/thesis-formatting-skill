@@ -21,6 +21,18 @@ RENDER_MANIFEST_FIXTURE = (
 PDF_FIXTURE = ROOT / "tests" / "fixtures" / "contracts" / "render-output.pdf"
 
 
+def _manifest_bytes(*, mode: str) -> bytes:
+    manifest = json.loads(RENDER_MANIFEST_FIXTURE.read_text(encoding="utf-8"))
+    manifest["environment"] = {
+        "mode": mode,
+        "canonical": mode == "canonical",
+    }
+    manifest["render_id"] = stable_id(
+        {key: value for key, value in manifest.items() if key != "render_id"}
+    )
+    return (json.dumps(manifest) + "\n").encode()
+
+
 def test_cli_version() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "thesis_format", "--version"],
@@ -592,6 +604,131 @@ def test_export_preview_and_release_check_use_injected_functions(
     stdout = capsys.readouterr().out
     for requested in (pdf, preview_dir, privacy_report):
         assert str(requested) in stdout
+
+
+def test_export_rejects_noncanonical_manifest_by_default(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+
+    def export(_source: Path, pdf: Path, report: Path) -> list[Path]:
+        pdf.write_bytes(PDF_FIXTURE.read_bytes())
+        report.write_bytes(_manifest_bytes(mode="local"))
+        return [pdf, report]
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
+        dependencies=cli.CliDependencies(export_document=export),
+    )
+
+    assert result == 2
+    assert "noncanonical" in capsys.readouterr().err
+
+
+def test_export_allows_explicit_noncanonical_development_manifest_with_warning(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+
+    def export(_source: Path, pdf: Path, report: Path) -> list[Path]:
+        pdf.write_bytes(PDF_FIXTURE.read_bytes())
+        report.write_bytes(_manifest_bytes(mode="local"))
+        return [pdf, report]
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+            "--allow-noncanonical",
+        ],
+        dependencies=cli.CliDependencies(export_document=export),
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "WARNING" in captured.err
+    assert "noncanonical" in captured.err
+    assert "development" in captured.err
+
+
+def test_export_accepts_canonical_manifest_without_warning(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "input.docx"
+    output = tmp_path / "output.pdf"
+    manifest = tmp_path / "render-manifest.json"
+    source.write_bytes(b"docx")
+
+    def export(_source: Path, pdf: Path, report: Path) -> list[Path]:
+        pdf.write_bytes(PDF_FIXTURE.read_bytes())
+        report.write_bytes(_manifest_bytes(mode="canonical"))
+        return [pdf, report]
+
+    result = cli.main(
+        [
+            "export",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ],
+        dependencies=cli.CliDependencies(export_document=export),
+    )
+
+    assert result == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_preview_warns_for_noncanonical_manifest(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    pdf = tmp_path / "input.pdf"
+    manifest = tmp_path / "input.render-manifest.json"
+    output_directory = tmp_path / "preview"
+    pdf.write_bytes(PDF_FIXTURE.read_bytes())
+    manifest.write_bytes(_manifest_bytes(mode="local"))
+
+    def preview(
+        _source: Path, directory: Path, _manifest: Path
+    ) -> list[Path]:
+        directory.mkdir()
+        image = directory / "page-1.png"
+        image.write_bytes(b"png")
+        return [image]
+
+    result = cli.main(
+        ["preview", str(pdf), "--output-dir", str(output_directory)],
+        dependencies=cli.CliDependencies(preview_document=preview),
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "WARNING" in captured.err
+    assert "noncanonical" in captured.err
+    assert "compliance" in captured.err
+    assert "publication" in captured.err
 
 
 def test_preview_derives_sibling_render_manifest(

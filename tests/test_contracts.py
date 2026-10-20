@@ -845,6 +845,15 @@ def test_render_font_manifest_hash_must_match_canonical_manifest() -> None:
         validate_contract("render-manifest", manifest)
 
 
+def test_render_manifest_requires_environment() -> None:
+    manifest = fixture("render-manifest")
+    manifest.pop("environment", None)
+    refresh_id(manifest, "render_id")
+
+    with pytest.raises(ContractError, match=r"environment"):
+        validate_contract("render-manifest", manifest)
+
+
 def test_render_environment_canonical_flag_must_match_mode() -> None:
     manifest = fixture("render-manifest")
     manifest["environment"] = {"mode": "local", "canonical": True}

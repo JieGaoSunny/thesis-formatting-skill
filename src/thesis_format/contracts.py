@@ -550,17 +550,16 @@ def _validate_privacy(report: dict[str, Any]) -> None:
 
 
 def _validate_render(report: dict[str, Any]) -> None:
-    environment = report.get("environment")
-    if environment is not None:
-        expected_canonical = environment["mode"] == "canonical"
-        if environment["canonical"] is not expected_canonical:
-            raise ContractError(
-                (
-                    "environment canonical flag must be true exactly when "
-                    "mode is canonical"
-                ),
-                ("environment", "canonical"),
-            )
+    environment = report["environment"]
+    expected_canonical = environment["mode"] == "canonical"
+    if environment["canonical"] is not expected_canonical:
+        raise ContractError(
+            (
+                "environment canonical flag must be true exactly when "
+                "mode is canonical"
+            ),
+            ("environment", "canonical"),
+        )
     expected_font_manifest_hash = canonical_sha256(report["font_manifest"])
     if report["font_manifest_hash"] != expected_font_manifest_hash:
         raise ContractError(

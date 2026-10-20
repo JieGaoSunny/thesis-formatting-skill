@@ -45,7 +45,10 @@ These commands require installed renderer and privacy tooling. An unavailable re
 Canonical container export also requires a valid immutable registry digest in
 `THESIS_RENDER_IMAGE_DIGEST`. Use `THESIS_RENDER_MODE=local` only for explicit
 local development; its manifest is marked noncanonical and cannot satisfy
-canonical acceptance.
+canonical acceptance. The export command rejects noncanonical manifests by
+default. `--allow-noncanonical` is a development-only escape hatch and
+**must not** be used for compliance evidence, publication, or any public artifact.
+Preview warns when its manifest is noncanonical.
 
 ## Common Mistakes and Red Flags
 

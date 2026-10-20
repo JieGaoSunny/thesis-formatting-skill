@@ -121,3 +121,12 @@ def test_skill_documents_test_commands_and_all_installation_paths() -> None:
         ".github/skills/thesis-formatting/SKILL.md",
     ):
         assert f"`{path}`" in text
+
+
+def test_skill_forbids_noncanonical_override_for_compliance_and_publication() -> None:
+    text = _skill()
+
+    assert "--allow-noncanonical" in text
+    assert "must not" in text.lower()
+    assert "compliance" in text.lower()
+    assert "publication" in text.lower()
