@@ -45,6 +45,20 @@ def test_module_help_lists_every_task10_command() -> None:
         assert command in result.stdout
 
 
+def test_preview_help_explicitly_accepts_pdf_and_manifest() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "thesis_format", "preview", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "INPUT.pdf" in result.stdout
+    assert "PDF" in result.stdout
+    assert "--manifest" in result.stdout
+    assert "DOCX preview" not in result.stdout
+
+
 def test_audit_subprocess_writes_requested_reports_and_returns_noncompliance(
     tmp_path: Path,
 ) -> None:
@@ -407,8 +421,13 @@ def test_default_optional_tool_wrappers_lazy_import_and_dispatch(
         manifest.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
         return [output, manifest]
 
-    def preview_pdf(document: Path, output_directory: Path) -> list[Path]:
-        calls.append(("preview", (document, output_directory)))
+    def preview_pdf(
+        document: Path,
+        output_directory: Path,
+        *,
+        manifest_path: Path,
+    ) -> list[Path]:
+        calls.append(("preview", (document, output_directory, manifest_path)))
         output_directory.mkdir()
         image = output_directory / "page-1.png"
         image.write_bytes(b"png")
@@ -448,7 +467,17 @@ def test_default_optional_tool_wrappers_lazy_import_and_dispatch(
         == 0
     )
     assert (
-        cli.main(["preview", str(source), "--output-dir", str(preview_dir)]) == 0
+        cli.main(
+            [
+                "preview",
+                str(PDF_FIXTURE),
+                "--manifest",
+                str(RENDER_MANIFEST_FIXTURE),
+                "--output-dir",
+                str(preview_dir),
+            ]
+        )
+        == 0
     )
     assert (
         cli.main(
@@ -483,8 +512,10 @@ def test_export_preview_and_release_check_use_injected_functions(
         manifest.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
         return [output, manifest]
 
-    def preview(document: Path, output_directory: Path) -> list[Path]:
-        calls.append(("preview", (document, output_directory)))
+    def preview(
+        document: Path, output_directory: Path, manifest: Path
+    ) -> list[Path]:
+        calls.append(("preview", (document, output_directory, manifest)))
         output_directory.mkdir()
         image = output_directory / "page-1.png"
         image.write_bytes(b"png")
@@ -524,7 +555,14 @@ def test_export_preview_and_release_check_use_injected_functions(
     )
     assert (
         cli.main(
-            ["preview", str(source), "--output-dir", str(preview_dir)],
+            [
+                "preview",
+                str(PDF_FIXTURE),
+                "--manifest",
+                str(RENDER_MANIFEST_FIXTURE),
+                "--output-dir",
+                str(preview_dir),
+            ],
             dependencies=dependencies,
         )
         == 0
@@ -554,6 +592,34 @@ def test_export_preview_and_release_check_use_injected_functions(
     stdout = capsys.readouterr().out
     for requested in (pdf, preview_dir, privacy_report):
         assert str(requested) in stdout
+
+
+def test_preview_derives_sibling_render_manifest(
+    tmp_path: Path,
+) -> None:
+    pdf = tmp_path / "thesis.pdf"
+    pdf.write_bytes(PDF_FIXTURE.read_bytes())
+    manifest = tmp_path / "thesis.render-manifest.json"
+    manifest.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
+    output_directory = tmp_path / "preview"
+    received: list[tuple[Path, Path, Path]] = []
+
+    def preview(
+        source: Path, output: Path, manifest_path: Path
+    ) -> list[Path]:
+        received.append((source, output, manifest_path))
+        output.mkdir()
+        image = output / "page-1.png"
+        image.write_bytes(b"png")
+        return [image]
+
+    result = cli.main(
+        ["preview", str(pdf), "--output-dir", str(output_directory)],
+        dependencies=cli.CliDependencies(preview_document=preview),
+    )
+
+    assert result == 0
+    assert received == [(pdf, output_directory, manifest)]
 
 
 @pytest.mark.parametrize("provider_result", ({}, None))
@@ -658,6 +724,8 @@ def test_export_rejects_noop_or_empty_artifact_provider(
     captured = capsys.readouterr()
     assert result == 2
     assert str(output) not in captured.out
+    assert not output.exists()
+    assert not manifest.exists()
 
 
 def test_export_rejects_existing_pdf_before_provider(
@@ -752,6 +820,8 @@ def test_export_rejects_invalid_returned_render_manifest(
     captured = capsys.readouterr()
     assert result == 2
     assert str(output) not in captured.out
+    assert not output.exists()
+    assert not manifest.exists()
 
 
 def test_export_rejects_arbitrary_text_manifest(
@@ -986,11 +1056,11 @@ def test_export_rejects_missing_returned_render_manifest(tmp_path: Path) -> None
 @pytest.mark.parametrize(
     "provider",
     (
-        lambda _source, _directory: None,
-        lambda _source, _directory: {},
-        lambda _source, directory: directory.mkdir() or [],
-        lambda _source, directory: [directory / "missing.png"],
-        lambda _source, directory: (
+        lambda _source, _directory, _manifest: None,
+        lambda _source, _directory, _manifest: {},
+        lambda _source, directory, _manifest: directory.mkdir() or [],
+        lambda _source, directory, _manifest: [directory / "missing.png"],
+        lambda _source, directory, _manifest: (
             directory.mkdir(),
             (directory / "page-1.png").write_bytes(b""),
             [directory / "page-1.png"],
@@ -1002,9 +1072,11 @@ def test_preview_rejects_noop_missing_or_empty_artifact_provider(
     capsys: pytest.CaptureFixture[str],
     provider: object,
 ) -> None:
-    source = tmp_path / "input.docx"
+    source = tmp_path / "input.pdf"
+    manifest = tmp_path / "input.render-manifest.json"
     output_directory = tmp_path / "preview"
-    source.write_bytes(b"docx")
+    source.write_bytes(PDF_FIXTURE.read_bytes())
+    manifest.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
 
     result = cli.main(
         ["preview", str(source), "--output-dir", str(output_directory)],
@@ -1019,17 +1091,19 @@ def test_preview_rejects_noop_missing_or_empty_artifact_provider(
 def test_preview_rejects_existing_nonempty_directory_before_provider(
     tmp_path: Path,
 ) -> None:
-    source = tmp_path / "input.docx"
+    source = tmp_path / "input.pdf"
+    manifest = tmp_path / "input.render-manifest.json"
     output_directory = tmp_path / "preview"
     stale_image = output_directory / "page-1.png"
-    source.write_bytes(b"docx")
+    source.write_bytes(PDF_FIXTURE.read_bytes())
+    manifest.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
     output_directory.mkdir()
     stale_image.write_bytes(b"stale png")
 
     result = cli.main(
         ["preview", str(source), "--output-dir", str(output_directory)],
         dependencies=cli.CliDependencies(
-            preview_document=lambda _source, _directory: pytest.fail(
+            preview_document=lambda _source, _directory, _manifest: pytest.fail(
                 "preview provider must not run for a nonempty output directory"
             )
         ),
@@ -1042,11 +1116,13 @@ def test_preview_rejects_existing_nonempty_directory_before_provider(
 def test_preview_accepts_new_images_created_in_output_directory(
     tmp_path: Path,
 ) -> None:
-    source = tmp_path / "input.docx"
+    source = tmp_path / "input.pdf"
+    manifest = tmp_path / "input.render-manifest.json"
     output_directory = tmp_path / "preview"
-    source.write_bytes(b"docx")
+    source.write_bytes(PDF_FIXTURE.read_bytes())
+    manifest.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
 
-    def provider(_source: Path, directory: Path) -> None:
+    def provider(_source: Path, directory: Path, _manifest: Path) -> None:
         directory.mkdir()
         (directory / "page-1.png").write_bytes(b"png")
 
@@ -1088,27 +1164,36 @@ def test_release_check_rejects_existing_report_before_provider(
     assert report.read_bytes() == b"stale report"
 
 
-def test_preview_accepts_images_in_output_directory_with_returned_manifest(
+def test_preview_passes_explicit_manifest_to_provider(
     tmp_path: Path,
 ) -> None:
-    source = tmp_path / "input.docx"
+    source = tmp_path / "input.pdf"
     output_directory = tmp_path / "preview"
     manifest = tmp_path / "render-manifest.json"
-    source.write_bytes(b"docx")
+    source.write_bytes(PDF_FIXTURE.read_bytes())
+    manifest.write_bytes(RENDER_MANIFEST_FIXTURE.read_bytes())
+    received: list[Path] = []
 
-    def provider(_source: Path, directory: Path) -> list[Path]:
+    def provider(
+        _source: Path, directory: Path, manifest_path: Path
+    ) -> list[Path]:
+        received.append(manifest_path)
         directory.mkdir()
-        (directory / "page-1.png").write_bytes(b"png")
-        manifest.write_bytes(
-            (
-                ROOT / "tests" / "fixtures" / "contracts" / "render-manifest.json"
-            ).read_bytes()
-        )
-        return [manifest]
+        image = directory / "page-1.png"
+        image.write_bytes(b"png")
+        return [image]
 
     result = cli.main(
-        ["preview", str(source), "--output-dir", str(output_directory)],
+        [
+            "preview",
+            str(source),
+            "--manifest",
+            str(manifest),
+            "--output-dir",
+            str(output_directory),
+        ],
         dependencies=cli.CliDependencies(preview_document=provider),
     )
 
     assert result == 0
+    assert received == [manifest]

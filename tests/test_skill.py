@@ -93,6 +93,11 @@ def test_skill_has_exact_commands_quick_reference_and_pressure_red_flags() -> No
         "--output build/thesis-formatted.pdf "
         "--manifest reports/render-manifest.json"
     ) in text
+    assert (
+        "thesis-format preview build/thesis-formatted.pdf "
+        "--manifest reports/render-manifest.json "
+        "--output-dir reports/preview"
+    ) in text
     for rationalization in (
         "The deadline is close",
         "copy the prepared template",

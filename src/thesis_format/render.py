@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import locale as locale_module
 import os
 import re
 import shutil
@@ -85,9 +84,10 @@ def _load_environment(
         )
     if not isinstance(renderer.get("name"), str) or not renderer["name"]:
         raise CanonicalEnvironmentError("render environment is missing renderer name")
-    if not isinstance(renderer.get("version"), str) or not renderer["version"]:
+    expected_snapshot = renderer.get("expected_source_snapshot")
+    if not isinstance(expected_snapshot, str) or not expected_snapshot:
         raise CanonicalEnvironmentError(
-            "render environment is missing renderer version"
+            "render environment is missing expected source snapshot"
         )
     selected_locale = loaded.get("locale")
     if not isinstance(selected_locale, str) or len(selected_locale) < 2:
@@ -292,6 +292,7 @@ def inspect_pdf(
     finally:
         document.close()
 
+    detected_version = _detect_soffice_version(selected_environment)
     page_dimensions = {
         "width_pt": dimensions[0][0],
         "height_pt": dimensions[0][1],
@@ -310,7 +311,7 @@ def inspect_pdf(
         "structural_hash": canonical_sha256(structural),
         "renderer": {
             "name": renderer["name"],
-            "version": renderer["version"],
+            "version": detected_version,
             "image_digest": renderer["image_digest"],
         },
         "font_manifest_hash": canonical_sha256(font_manifest),
@@ -349,6 +350,38 @@ def _run_soffice(
         raise RenderError(f"LibreOffice rendering failed: {detail}") from error
 
 
+def _detect_soffice_version(environment: Mapping[str, Any]) -> str:
+    soffice = str(
+        environment.get("soffice_path") or shutil.which("soffice") or "soffice"
+    )
+    timeout_seconds = float(
+        environment.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
+    )
+    process_environment = os.environ.copy()
+    process_environment.update(
+        {
+            "LANG": str(environment["locale"]),
+            "LC_ALL": str(environment["locale"]),
+            "TZ": str(environment.get("timezone", "UTC")),
+        }
+    )
+    try:
+        completed = subprocess.run(
+            [soffice, "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=process_environment,
+        )
+    except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
+        raise RenderError("could not detect LibreOffice version") from error
+    version = (completed.stdout or completed.stderr or "").strip()
+    if not version:
+        raise RenderError("LibreOffice reported an empty version")
+    return version
+
+
 def export_document(
     input_docx: str | Path,
     output_pdf: str | Path,
@@ -375,35 +408,46 @@ def export_document(
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     manifest_output.parent.mkdir(parents=True, exist_ok=True)
-    work = output.parent / f".render-work-{uuid.uuid4().hex}"
-    source_dir = work / "source"
-    refreshed_dir = work / "refreshed"
-    pdf_dir = work / "pdf"
-    profile_dir = work / "profile"
-    for directory in (source_dir, refreshed_dir, pdf_dir, profile_dir):
-        directory.mkdir(parents=True, exist_ok=False)
-    staged_source = source_dir / source.name
-    shutil.copy2(source, staged_source)
-    process_environment = os.environ.copy()
-    process_environment.update(
-        {
-            "HOME": str(work / "home"),
-            "LANG": str(selected_environment["locale"]),
-            "LC_ALL": str(selected_environment["locale"]),
-            "TZ": str(selected_environment.get("timezone", "UTC")),
-        }
+    if output.exists():
+        raise RenderError(f"PDF output already exists: {output}")
+    if manifest_output.exists():
+        raise RenderError(f"render manifest already exists: {manifest_output}")
+    token = uuid.uuid4().hex
+    work = output.parent / f".render-work-{token}"
+    temporary_pdf = output.parent / f".render-pdf-{token}.pdf"
+    temporary_manifest = (
+        manifest_output.parent / f".render-manifest-{token}.json"
     )
-    profile_argument = f"-env:UserInstallation={profile_dir.resolve().as_uri()}"
-    common = [
-        str(soffice),
-        "--headless",
-        "--nologo",
-        "--nodefault",
-        "--nolockcheck",
-        "--nofirststartwizard",
-        profile_argument,
-    ]
     try:
+        source_dir = work / "source"
+        refreshed_dir = work / "refreshed"
+        pdf_dir = work / "pdf"
+        profile_dir = work / "profile"
+        for directory in (source_dir, refreshed_dir, pdf_dir, profile_dir):
+            directory.mkdir(parents=True, exist_ok=False)
+        staged_source = source_dir / source.name
+        shutil.copy2(source, staged_source)
+        process_environment = os.environ.copy()
+        process_environment.update(
+            {
+                "HOME": str(work / "home"),
+                "LANG": str(selected_environment["locale"]),
+                "LC_ALL": str(selected_environment["locale"]),
+                "TZ": str(selected_environment.get("timezone", "UTC")),
+            }
+        )
+        profile_argument = (
+            f"-env:UserInstallation={profile_dir.resolve().as_uri()}"
+        )
+        common = [
+            str(soffice),
+            "--headless",
+            "--nologo",
+            "--nodefault",
+            "--nolockcheck",
+            "--nofirststartwizard",
+            profile_argument,
+        ]
         _run_soffice(
             [
                 *common,
@@ -439,15 +483,38 @@ def export_document(
         generated = pdf_dir / f"{refreshed.stem}.pdf"
         if not generated.is_file() or generated.stat().st_size == 0:
             raise RenderError("LibreOffice produced no PDF")
-        if output.exists():
-            raise RenderError(f"PDF output already exists: {output}")
-        if manifest_output.exists():
-            raise RenderError(f"render manifest already exists: {manifest_output}")
-        shutil.move(str(generated), output)
-        manifest = inspect_pdf(output, selected_environment)
-        manifest_output.write_text(canonical_json(manifest), encoding="utf-8")
+        os.replace(generated, temporary_pdf)
+        manifest = inspect_pdf(temporary_pdf, selected_environment)
+        validate_render_manifest(manifest)
+        if manifest["raw_pdf_sha256"] != _sha256_file(temporary_pdf):
+            raise RenderError(
+                "render manifest raw_pdf_sha256 does not match temporary PDF"
+            )
+        temporary_manifest.write_text(
+            canonical_json(manifest), encoding="utf-8"
+        )
+        persisted_manifest = _read_manifest(temporary_manifest)
+        if persisted_manifest["raw_pdf_sha256"] != _sha256_file(temporary_pdf):
+            raise RenderError(
+                "temporary render manifest raw_pdf_sha256 does not match PDF"
+            )
+        published_manifest = False
+        published_pdf = False
+        try:
+            os.replace(temporary_manifest, manifest_output)
+            published_manifest = True
+            os.replace(temporary_pdf, output)
+            published_pdf = True
+        except BaseException:
+            if published_pdf:
+                output.unlink(missing_ok=True)
+            if published_manifest:
+                manifest_output.unlink(missing_ok=True)
+            raise
     finally:
         shutil.rmtree(work, ignore_errors=True)
+        temporary_pdf.unlink(missing_ok=True)
+        temporary_manifest.unlink(missing_ok=True)
     return [output, manifest_output]
 
 

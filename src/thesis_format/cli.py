@@ -22,7 +22,7 @@ from thesis_format.profile import load_profile
 
 
 ExportFunction = Callable[[Path, Path, Path], Path | Sequence[Path] | None]
-PreviewFunction = Callable[[Path, Path], Path | Sequence[Path] | None]
+PreviewFunction = Callable[[Path, Path, Path], Path | Sequence[Path] | None]
 PrivacyFunction = Callable[[Path, Path], Mapping[str, object]]
 
 
@@ -40,7 +40,7 @@ def _default_export_document(
 
 
 def _default_preview_pdf(
-    source: Path, output_directory: Path
+    source: Path, output_directory: Path, manifest: Path
 ) -> Path | Sequence[Path] | None:
     try:
         from thesis_format.render import preview_pdf
@@ -49,7 +49,7 @@ def _default_preview_pdf(
             "optional preview tooling is unavailable; install tooling that "
             "provides thesis_format.render.preview_pdf"
         ) from error
-    return preview_pdf(source, output_directory)
+    return preview_pdf(source, output_directory, manifest_path=manifest)
 
 
 def _default_release_check(
@@ -102,8 +102,21 @@ def _parser() -> argparse.ArgumentParser:
     exporter.add_argument("--output", "--pdf", dest="output", type=Path, required=True)
     exporter.add_argument("--manifest", type=Path, required=True)
 
-    preview = commands.add_parser("preview", help="render DOCX preview images")
-    preview.add_argument("source", type=Path)
+    preview = commands.add_parser("preview", help="render PDF preview images")
+    preview.add_argument(
+        "source",
+        type=Path,
+        metavar="INPUT.pdf",
+        help="PDF produced by the export command",
+    )
+    preview.add_argument(
+        "--manifest",
+        type=Path,
+        help=(
+            "render manifest for INPUT.pdf (defaults to "
+            "INPUT.render-manifest.json, then INPUT.json)"
+        ),
+    )
     preview.add_argument(
         "--output-dir", "--output", dest="output_directory", type=Path, required=True
     )
@@ -172,6 +185,14 @@ def _write_text(path: Path, content: str) -> None:
 def _require_missing(path: Path, label: str) -> None:
     if path.exists() or path.is_symlink():
         raise ValueError(f"{label} already exists: {path}")
+
+
+def _remove_new_file(path: Path) -> None:
+    try:
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+    except OSError:
+        pass
 
 
 def _require_empty_or_missing_directory(path: Path, label: str) -> None:
@@ -324,33 +345,49 @@ def _run_export(args: argparse.Namespace, function: ExportFunction | None) -> in
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     _require_missing(args.output, "PDF output")
     _require_missing(args.manifest, "render manifest")
-    returned_paths = _provider_paths(
-        function(args.source, args.output, args.manifest)
-    )
-    _require_nonempty_regular_file(args.output, "PDF output")
-    manifest = _validate_render_manifest_file(args.manifest)
-    actual_pdf_sha256 = _sha256_file(args.output)
-    expected_pdf_sha256 = manifest["raw_pdf_sha256"]
-    if actual_pdf_sha256 != expected_pdf_sha256:
-        raise ValueError(
-            "PDF output SHA-256 does not match render manifest "
-            f"raw_pdf_sha256: {args.output}"
+    try:
+        returned_paths = _provider_paths(
+            function(args.source, args.output, args.manifest)
         )
-    _validate_returned_artifacts(
-        tuple(
-            path
-            for path in returned_paths
-            if path not in {args.output, args.manifest}
+        _require_nonempty_regular_file(args.output, "PDF output")
+        manifest = _validate_render_manifest_file(args.manifest)
+        actual_pdf_sha256 = _sha256_file(args.output)
+        expected_pdf_sha256 = manifest["raw_pdf_sha256"]
+        if actual_pdf_sha256 != expected_pdf_sha256:
+            raise ValueError(
+                "PDF output SHA-256 does not match render manifest "
+                f"raw_pdf_sha256: {args.output}"
+            )
+        _validate_returned_artifacts(
+            tuple(
+                path
+                for path in returned_paths
+                if path not in {args.output, args.manifest}
+            )
         )
-    )
+    except BaseException:
+        _remove_new_file(args.output)
+        _remove_new_file(args.manifest)
+        raise
     print(args.output)
     return 0
 
 
 def _run_preview(args: argparse.Namespace, function: PreviewFunction | None) -> int:
     _require_file(args.source, "input")
+    manifest = args.manifest
+    if manifest is None:
+        preferred = args.source.with_suffix(".render-manifest.json")
+        fallback = args.source.with_suffix(".json")
+        manifest = (
+            preferred
+            if preferred.is_file() or not fallback.is_file()
+            else fallback
+        )
+    _require_file(manifest, "render manifest")
     _reject_path_collisions(
         ("source", args.source),
+        ("manifest", manifest),
         ("preview output", args.output_directory),
     )
     _require_empty_or_missing_directory(
@@ -362,7 +399,9 @@ def _run_preview(args: argparse.Namespace, function: PreviewFunction | None) -> 
             "provides thesis_format.render.preview_pdf"
         )
     preexisting = _snapshot_paths(args.output_directory.parent)
-    returned_paths = _provider_paths(function(args.source, args.output_directory))
+    returned_paths = _provider_paths(
+        function(args.source, args.output_directory, manifest)
+    )
     _reject_preexisting_provider_artifacts(returned_paths, preexisting)
     _validate_returned_artifacts(returned_paths)
     image_suffixes = {

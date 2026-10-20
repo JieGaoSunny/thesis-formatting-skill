@@ -13,7 +13,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
-RUN printf '%s\n' \
+RUN rm -f /etc/apt/sources.list.d/debian.sources \
+    && printf '%s\n' \
       "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ bookworm main" \
       "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/ bookworm-security main" \
       > /etc/apt/sources.list \
@@ -31,6 +32,9 @@ RUN printf '%s\n' \
     && fc-cache -f \
     && test "$(fc-match 'Noto Serif CJK SC' --format='%{family}\n' | head -1)" = "Noto Serif CJK SC" \
     && fc-match 'Liberation Serif' --format='%{family}\n' | head -1 | grep -Fx 'Liberation Serif' \
+    && mkdir -p /usr/local/share/thesis-format \
+    && soffice --version | tee /usr/local/share/thesis-format/soffice-version.txt \
+    && test -s /usr/local/share/thesis-format/soffice-version.txt \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -45,7 +49,7 @@ COPY rules ./rules
 COPY templates ./templates
 COPY render-environment.json ./
 RUN uv sync --frozen --all-extras \
-    && soffice --version \
+    && test "$(soffice --version)" = "$(cat /usr/local/share/thesis-format/soffice-version.txt)" \
     && pdftoppm -v 2>&1 | head -1 \
     && uv run python -c "import pikepdf, pymupdf, thesis_format.render"
 

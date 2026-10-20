@@ -20,6 +20,7 @@ from thesis_format.render import (
     inspect_pdf,
     preview_pdf,
 )
+from thesis_format import render
 
 
 ROOT = Path(__file__).parents[1]
@@ -63,7 +64,8 @@ def _environment(*, image_digest: str | None = "sha256:" + "a" * 64) -> dict:
         "schema_version": "1.0",
         "renderer": {
             "name": "LibreOffice",
-            "version": "test",
+            "expected_source_snapshot": "debian-bookworm@20250203T000000Z",
+            "local_detected_version": "LibreOffice local-test",
             "image_digest": image_digest,
         },
         "locale": "zh_CN.UTF-8",
@@ -73,8 +75,17 @@ def _environment(*, image_digest: str | None = "sha256:" + "a" * 64) -> dict:
     }
 
 
+@pytest.fixture
+def detected_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        render,
+        "_detect_soffice_version",
+        lambda _environment: "LibreOffice 24.2.7.2 actual-build",
+    )
+
+
 def test_inspect_pdf_produces_valid_manifest_and_matches_baseline(
-    tmp_path: Path,
+    tmp_path: Path, detected_version: None
 ) -> None:
     pdf = tmp_path / "demo.pdf"
     _make_pdf(pdf)
@@ -99,6 +110,11 @@ def test_inspect_pdf_produces_valid_manifest_and_matches_baseline(
     assert len(manifest["structural_hash"]) == 64
     assert len(manifest["extracted_text_hash"]) == 64
     assert all(len(page["perceptual_hash"]) == 16 for page in manifest["pages"])
+    assert manifest["renderer"] == {
+        "name": "LibreOffice",
+        "version": "LibreOffice 24.2.7.2 actual-build",
+        "image_digest": "sha256:" + "a" * 64,
+    }
 
 
 def test_inspect_pdf_rejects_corrupt_input(tmp_path: Path) -> None:
@@ -146,6 +162,13 @@ def test_render_environment_and_dockerfile_do_not_claim_unpublished_image() -> N
     dockerfile = (ROOT / "Dockerfile.render").read_text(encoding="utf-8")
 
     assert environment["renderer"]["image_digest"] is None
+    assert "version" not in environment["renderer"]
+    assert environment["renderer"]["expected_source_snapshot"].endswith(
+        "20250203T000000Z"
+    )
+    assert environment["renderer"]["local_detected_version"].startswith(
+        "LibreOffice "
+    )
     assert environment["canonical_container_status"] == "pending-release-ci"
     assert (
         "python:3.12.11-slim-bookworm@sha256:"
@@ -155,9 +178,30 @@ def test_render_environment_and_dockerfile_do_not_claim_unpublished_image() -> N
     assert "uv sync --frozen" in dockerfile
     assert "fonts-noto-cjk" in dockerfile
     assert "TZ=UTC" in dockerfile
+    assert "rm -f /etc/apt/sources.list.d/debian.sources" in dockerfile
+    assert "soffice --version | tee" in dockerfile
+    assert "test -s /usr/local/share/thesis-format/soffice-version.txt" in dockerfile
 
 
-def test_preview_pdf_supports_numeric_and_semantic_selectors(tmp_path: Path) -> None:
+def test_detect_soffice_version_records_command_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def completed(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args[0], 0, stdout="LibreOffice 24.2.7.2 420(Build:2)\n", stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", completed)
+
+    assert (
+        render._detect_soffice_version(_environment())
+        == "LibreOffice 24.2.7.2 420(Build:2)"
+    )
+
+
+def test_preview_pdf_supports_numeric_and_semantic_selectors(
+    tmp_path: Path, detected_version: None
+) -> None:
     pdf = tmp_path / "demo.pdf"
     output = tmp_path / "previews"
     manifest_path = tmp_path / "manifest.json"
@@ -186,7 +230,7 @@ def test_preview_pdf_supports_numeric_and_semantic_selectors(tmp_path: Path) -> 
 
 @pytest.mark.parametrize("selector", ["0", "-1", "x", "4"])
 def test_preview_pdf_rejects_invalid_numeric_selectors(
-    tmp_path: Path, selector: str
+    tmp_path: Path, selector: str, detected_version: None
 ) -> None:
     pdf = tmp_path / "demo.pdf"
     manifest_path = tmp_path / "manifest.json"
@@ -204,7 +248,9 @@ def test_preview_pdf_rejects_invalid_numeric_selectors(
         )
 
 
-def test_preview_pdf_rejects_manifest_pdf_mismatch(tmp_path: Path) -> None:
+def test_preview_pdf_rejects_manifest_pdf_mismatch(
+    tmp_path: Path, detected_version: None
+) -> None:
     pdf = tmp_path / "demo.pdf"
     other_pdf = tmp_path / "other.pdf"
     manifest_path = tmp_path / "manifest.json"
@@ -234,6 +280,7 @@ def test_preview_pdf_rejects_invalid_destinations(
     tmp_path: Path,
     destinations: list[tuple[str, int]],
     message: str,
+    detected_version: None,
 ) -> None:
     pdf = tmp_path / "demo.pdf"
     manifest_path = tmp_path / "manifest.json"
@@ -254,7 +301,9 @@ def test_preview_pdf_rejects_invalid_destinations(
         )
 
 
-def test_preview_pdf_rejects_missing_destination(tmp_path: Path) -> None:
+def test_preview_pdf_rejects_missing_destination(
+    tmp_path: Path, detected_version: None
+) -> None:
     pdf = tmp_path / "demo.pdf"
     manifest_path = tmp_path / "manifest.json"
     _make_pdf(pdf)
@@ -318,6 +367,81 @@ def test_export_document_rejects_nonzero_exit(
             tmp_path / "manifest.json",
             _environment(),
         )
+
+
+def _fake_soffice_conversion(
+    command: list[str], *, timeout_seconds: float, environment: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    del timeout_seconds, environment
+    output_directory = Path(command[command.index("--outdir") + 1])
+    source = Path(command[-1])
+    output_directory.mkdir(parents=True, exist_ok=True)
+    if command[command.index("--convert-to") + 1].startswith("docx:"):
+        shutil.copy2(source, output_directory / source.name)
+    else:
+        _make_pdf(output_directory / f"{source.stem}.pdf", pages=1)
+    return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+
+@pytest.mark.parametrize("failure", ("inspection", "manifest"))
+def test_export_document_failure_leaves_no_outputs_and_can_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    source = tmp_path / "input.docx"
+    source.write_bytes(b"docx")
+    output = tmp_path / "output.pdf"
+    manifest_path = tmp_path / "manifest.json"
+    monkeypatch.setattr(render, "_run_soffice", _fake_soffice_conversion)
+    monkeypatch.setattr(
+        render,
+        "_detect_soffice_version",
+        lambda _environment: "LibreOffice 24.2.7.2 actual-build",
+    )
+    real_inspect = render.inspect_pdf
+
+    if failure == "inspection":
+        monkeypatch.setattr(
+            render,
+            "inspect_pdf",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RenderError("inspection failed")
+            ),
+        )
+    else:
+        monkeypatch.setattr(
+            render,
+            "validate_render_manifest",
+            lambda _value: (_ for _ in ()).throw(
+                ValueError("manifest failed")
+            ),
+        )
+
+    with pytest.raises((RenderError, ValueError), match="failed"):
+        export_document(source, output, manifest_path, _environment())
+
+    assert not output.exists()
+    assert not manifest_path.exists()
+    assert not list(tmp_path.glob(".render-*"))
+
+    if failure == "inspection":
+        monkeypatch.setattr(render, "inspect_pdf", real_inspect)
+    else:
+        monkeypatch.undo()
+        monkeypatch.setattr(render, "_run_soffice", _fake_soffice_conversion)
+        monkeypatch.setattr(
+            render,
+            "_detect_soffice_version",
+            lambda _environment: "LibreOffice 24.2.7.2 actual-build",
+        )
+
+    assert export_document(source, output, manifest_path, _environment()) == [
+        output,
+        manifest_path,
+    ]
+    assert output.is_file()
+    assert manifest_path.is_file()
 
 
 @pytest.mark.integration
