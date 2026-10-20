@@ -1038,8 +1038,12 @@ class FigureRule:
                     max(widths),
                     context.profile.figures.max_width_mm,
                 )
-            justification = _attr(
-                paragraph.find("w:pPr/w:jc", namespaces=NS), "val"
+            justification = (
+                _attr(
+                    _effective_paragraph_property(context, paragraph, "jc"),
+                    "val",
+                )
+                or "left"
             )
             if justification != context.profile.figures.alignment:
                 yield AuditFinding(

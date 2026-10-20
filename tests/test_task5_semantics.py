@@ -1217,6 +1217,41 @@ def test_caption_position_uses_profile_setting(
     assert rule_id not in _rule_ids_for_profile(path, profile)
 
 
+def test_figure_alignment_resolves_style_and_direct_override(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "figure-alignment.docx",
+        [
+            {"text": "figure", "style": "CenteredFigure"},
+            {"text": "图题", "style": "AppleFigureCaption"},
+        ],
+    )
+    _add_drawing(path, 1)
+
+    styles = _xml(path, "word/styles.xml")
+    figure_style = styles.xpath(
+        "./w:style[@w:styleId='CenteredFigure']",
+        namespaces=NS,
+    )[0]
+    p_pr = figure_style.find("w:pPr", namespaces=NS)
+    if p_pr is None:
+        p_pr = etree.SubElement(figure_style, f"{W}pPr")
+    etree.SubElement(p_pr, f"{W}jc", {f"{W}val": "center"})
+    _replace_part(path, "word/styles.xml", styles)
+
+    assert "FIGURE.ALIGNMENT" not in _rule_ids(path)
+
+    document = _xml(path, "word/document.xml")
+    figure = document.xpath(".//w:body/w:p", namespaces=NS)[0]
+    direct_p_pr = figure.find("w:pPr", namespaces=NS)
+    assert direct_p_pr is not None
+    etree.SubElement(direct_p_pr, f"{W}jc", {f"{W}val": "right"})
+    _replace_part(path, "word/document.xml", document)
+
+    assert "FIGURE.ALIGNMENT" in _rule_ids(path)
+
+
 @pytest.mark.parametrize("setting", ["header", "page_number"])
 def test_header_and_page_number_findings_honor_enabled_settings(
     tmp_path: Path,
