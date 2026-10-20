@@ -20,6 +20,7 @@ from thesis_format.contracts import validate_transformation_result
 from thesis_format.demo.build import build_template
 from thesis_format.demo.defects import DEFECTS
 from thesis_format.format import format_document
+from thesis_format.format.headers import _set_paragraph_style
 from thesis_format.ooxml import OoxmlPackage
 from thesis_format.profile import load_profile
 from thesis_format.snapshot import extract_snapshot
@@ -37,6 +38,24 @@ NS = {
     "ct": "http://schemas.openxmlformats.org/package/2006/content-types",
 }
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+
+
+def test_header_paragraph_style_precedes_alignment_in_schema_order() -> None:
+    paragraph = etree.fromstring(
+        (
+            f'<w:p xmlns:w="{NS["w"]}"><w:pPr>'
+            '<w:jc w:val="center"/></w:pPr></w:p>'
+        ).encode()
+    )
+
+    _set_paragraph_style(paragraph, "AppleHeader")
+
+    properties = paragraph.find(f"{{{NS['w']}}}pPr")
+    assert properties is not None
+    assert [etree.QName(child).localname for child in properties] == [
+        "pStyle",
+        "jc",
+    ]
 
 
 def _add_heading_numbering(

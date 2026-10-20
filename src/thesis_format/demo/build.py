@@ -455,6 +455,8 @@ def _three_line_table(
     table_model: Table,
     profile: FormatProfile,
     bookmark: tuple[str, int] | None = None,
+    *,
+    compact: bool = False,
 ):
     caption = _caption(
         document,
@@ -484,6 +486,8 @@ def _three_line_table(
         cell.text = ""
         paragraph = cell.paragraphs[0]
         paragraph.style = profile.styles.table_body.word_styles[0]
+        if compact:
+            paragraph.paragraph_format.line_spacing = Pt(11)
         paragraph.add_run(value)
         tc_borders = OxmlElement("w:tcBorders")
         bottom = OxmlElement("w:bottom")
@@ -501,6 +505,8 @@ def _three_line_table(
             cell.text = ""
             paragraph = cell.paragraphs[0]
             paragraph.style = profile.styles.table_body.word_styles[0]
+            if compact:
+                paragraph.paragraph_format.line_spacing = Pt(11)
             paragraph.add_run(value)
     if table_model.note:
         _styled(document, table_model.note, profile, "source_note")
@@ -735,8 +741,9 @@ def build_thesis(
     for paragraph_model in model.appendix.paragraphs:
         _styled(document, paragraph_model.text, selected, paragraph_model.role)
     for table_model in model.appendix.tables:
-        _three_line_table(document, table_model, selected)
-    _styled(document, "致谢", selected, "front_heading")
+        _three_line_table(document, table_model, selected, compact=True)
+    acknowledgements = _styled(document, "致谢", selected, "front_heading")
+    acknowledgements.paragraph_format.page_break_before = False
     _styled(document, model.acknowledgements, selected, "body")
     _styled(document, model.data_disclosure, selected, "body")
 

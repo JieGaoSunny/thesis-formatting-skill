@@ -6,6 +6,13 @@ A reusable skill for formatting DOCX theses consistently and demonstrating the w
 
 Generated demonstration artifacts will appear under `examples/`.
 
+The committed demo includes `before.docx` and `after.docx`, their local PDF
+renders, audit and content-preservation reports under `examples/reports/`, and
+paired screenshots for seven semantic destinations under
+`examples/screenshots/`. These PDFs and render manifests were produced with
+`THESIS_RENDER_MODE=local`; they demonstrate the workflow but are not canonical
+publication artifacts.
+
 The fictional study ships all 18 observation rows, scale inputs, and calculation
 helpers needed to reproduce its estimates, CVs, biases, and sensitivity envelope.
 Figure generation requires a verified CJK font: pass `font_path`, set

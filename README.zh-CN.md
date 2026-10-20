@@ -6,6 +6,11 @@
 
 生成的演示产物将放在 `examples/` 目录下。
 
+仓库提交的演示包含 `before.docx`、`after.docx`、对应的本地 PDF 渲染、
+`examples/reports/` 下的审计与内容保真报告，以及
+`examples/screenshots/` 下七个语义目标的成对截图。这些 PDF 和渲染清单使用
+`THESIS_RENDER_MODE=local` 生成，仅用于演示工作流，不属于规范发布产物。
+
 虚构研究包含完整的18条观测记录、等效尺度输入和计算函数，可复算估计值、变异系数、偏差及敏感性包络。生成图像时必须提供经验证的中文字体：可传入 `font_path`、设置 `THESIS_FIGURE_FONT`，或在标准系统路径安装 Noto Sans CJK。
 
 ## 渲染器身份

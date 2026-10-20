@@ -88,7 +88,9 @@ def manual_heading_numbers(source: str | Path, output: str | Path) -> Path:
             num_pr = paragraph._p.find(qn("w:pPr") + "/" + qn("w:numPr"))
             if num_pr is not None:
                 paragraph._p.get_or_add_pPr().remove(num_pr)
-            paragraph.text = "第一章 " + paragraph.text
+            text = paragraph._p.find(".//" + qn("w:t"))
+            if text is not None:
+                text.text = "第一章 " + (text.text or "")
             break
     return _save(document, destination)
 
@@ -148,8 +150,9 @@ def caption_positions(source: str | Path, output: str | Path) -> Path:
     document, destination = _open(source, output)
     for paragraph in document.paragraphs[:-1]:
         if paragraph._p.xpath(".//w:drawing"):
-            spacer = document.add_paragraph("图题位置错误", style="AppleBody")
-            paragraph._p.addnext(spacer._p)
+            caption = paragraph._p.getnext()
+            if caption is not None:
+                paragraph._p.addprevious(caption)
             break
     return _save(document, destination)
 

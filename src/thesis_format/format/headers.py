@@ -219,7 +219,8 @@ def _set_paragraph_style(
     if style_id:
         p_style = p_pr.find("w:pStyle", namespaces=NS)
         if p_style is None:
-            p_style = etree.SubElement(p_pr, f"{W}pStyle")
+            p_style = etree.Element(f"{W}pStyle")
+            _insert_by_schema_order(p_pr, p_style)
         p_style.set(f"{W}val", style_id)
     return p_pr
 
