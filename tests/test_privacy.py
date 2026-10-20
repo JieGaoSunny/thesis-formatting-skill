@@ -7,6 +7,7 @@ import zipfile
 from pathlib import Path
 
 import fitz
+import pikepdf
 import pytest
 import yaml
 
@@ -49,6 +50,27 @@ def _profile_without_forbidden_key(
         encoding="utf-8",
     )
     return path
+
+
+def _profile_with_forbidden_keys(
+    tmp_path: Path,
+    *keys: str,
+) -> Path:
+    profile = yaml.safe_load(PROFILE.read_text(encoding="utf-8"))
+    profile["privacy"]["forbidden_metadata_keys"] = list(keys)
+    path = tmp_path / "profile.yaml"
+    path.write_text(
+        yaml.safe_dump(profile, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_pdf_metadata(path: Path, key: str, value: str) -> None:
+    document = pikepdf.Pdf.new()
+    document.add_blank_page()
+    document.docinfo[pikepdf.Name(key)] = value
+    document.save(path)
 
 
 def test_denylist_is_literal_casefolded_nfc_and_normalizes_path_separators(
@@ -258,6 +280,42 @@ def test_scans_pdf_text_and_metadata(tmp_path: Path) -> None:
     locations = {finding["location"] for finding in report["findings"]}  # type: ignore[index]
     assert "page:1" in locations
     assert "metadata:author" in locations
+
+
+@pytest.mark.parametrize(
+    ("configured_key", "pdf_key", "private_value"),
+    [
+        ("CrEaToR", "/Creator", "艾苹"),
+        ("/producer", "/Producer", "Private PDF producer"),
+        ("creator", "/Author", "Private PDF author"),
+        ("company", "/Company", "Private PDF company"),
+        ("customowner", "/CustomOwner", "Private custom owner"),
+    ],
+)
+def test_pdf_forbidden_metadata_keys_are_casefolded_aliased_and_redacted(
+    tmp_path: Path,
+    configured_key: str,
+    pdf_key: str,
+    private_value: str,
+) -> None:
+    pdf = tmp_path / "metadata.pdf"
+    _write_pdf_metadata(pdf, pdf_key, private_value)
+    profile = _profile_with_forbidden_keys(tmp_path, configured_key)
+
+    report = release_check(pdf, profile, DENYLIST)
+    markdown = render_privacy_markdown(report)
+
+    metadata_findings = [
+        finding
+        for finding in report["findings"]  # type: ignore[index]
+        if finding["rule_id"] == "PRIVACY.METADATA"
+    ]
+    assert len(metadata_findings) == 1
+    assert metadata_findings[0]["location"] == (
+        f"metadata:{pdf_key.lstrip('/').casefold()}"
+    )
+    assert private_value not in json.dumps(report, ensure_ascii=False)
+    assert private_value not in markdown
 
 
 def test_detects_generic_private_values_fictional_mismatches_and_placeholders(

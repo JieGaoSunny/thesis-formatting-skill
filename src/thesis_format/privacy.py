@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Sequence
 
 import pymupdf
+import pikepdf
 from lxml import etree
 
 from thesis_format.contracts import (
@@ -100,6 +101,7 @@ _PERMITTED_IDENTITY_METADATA = {
     "creator": "author",
     "lastmodifiedby": "author",
 }
+_PDF_CREATOR_ALIASES = frozenset({"author", "creator", "creatortool"})
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,17 @@ def _normalized(value: str) -> str:
 def _sha(value: str | bytes) -> str:
     payload = value if isinstance(value, bytes) else value.encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _pdf_metadata_key_forms(value: str) -> frozenset[str]:
+    normalized = unicodedata.normalize("NFC", value).strip().lstrip("/").casefold()
+    forms = {normalized}
+    for separator in (":", ".", "|"):
+        if separator in normalized:
+            forms.add(normalized.rsplit(separator, 1)[1])
+    if forms & _PDF_CREATOR_ALIASES:
+        forms.update(_PDF_CREATOR_ALIASES)
+    return frozenset(forms)
 
 
 def _read_denylist(path: Path) -> tuple[tuple[str, str], ...]:
@@ -449,23 +462,53 @@ class _Scanner:
 
     def scan_pdf(self, path: Path, display_path: str) -> None:
         try:
+            metadata: dict[str, str] = {}
             with pymupdf.open(path) as document:
+                metadata.update(
+                    {
+                        key.casefold(): str(value)
+                        for key, value in (document.metadata or {}).items()
+                        if value
+                    }
+                )
                 for page_number, page in enumerate(document, 1):
-                    self.scan_text(page.get_text(), display_path, f"page:{page_number}")
-                for key, value in sorted((document.metadata or {}).items()):
-                    if value:
-                        self.scan_text(str(value), display_path, f"metadata:{key}")
-                        if key.casefold() == "author" and _normalized(
-                            str(value)
-                        ) != _normalized(self.profile.privacy.fictional_values.author):
-                            self.add(
-                                "PRIVACY.IDENTITY.AUTHOR",
-                                display_path,
-                                "metadata:author",
-                                str(value),
-                                "A non-fictional identity value was found.",
-                            )
-        except (OSError, RuntimeError, ValueError):
+                    self.scan_text(
+                        page.get_text(), display_path, f"page:{page_number}"
+                    )
+            with pikepdf.open(path) as pdf:
+                for key, value in pdf.docinfo.items():
+                    rendered = str(value).strip()
+                    if rendered:
+                        normalized_key = str(key).lstrip("/").casefold()
+                        metadata[normalized_key] = rendered
+            forbidden = frozenset(
+                form
+                for key in self.profile.privacy.forbidden_metadata_keys
+                for form in _pdf_metadata_key_forms(key)
+            )
+            for key, value in sorted(metadata.items()):
+                location = f"metadata:{key}"
+                self.scan_text(value, display_path, location)
+                if _pdf_metadata_key_forms(key) & forbidden:
+                    self.add(
+                        "PRIVACY.METADATA",
+                        display_path,
+                        location,
+                        value,
+                        "Forbidden document metadata was found and redacted.",
+                    )
+                    continue
+                if key == "author" and _normalized(value) != _normalized(
+                    self.profile.privacy.fictional_values.author
+                ):
+                    self.add(
+                        "PRIVACY.IDENTITY.AUTHOR",
+                        display_path,
+                        location,
+                        value,
+                        "A non-fictional identity value was found.",
+                    )
+        except (OSError, RuntimeError, ValueError, pikepdf.PdfError):
             self.unreadable(path, display_path, "pdf")
 
     def scan(self) -> None:
