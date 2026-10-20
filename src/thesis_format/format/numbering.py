@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import warnings
 from dataclasses import dataclass
 
 from lxml import etree
@@ -257,9 +259,343 @@ def _set_num_pr(paragraph: etree._Element, level: int, num_id: str) -> None:
     outline.set(f"{W}val", str(level))
 
 
+def _paragraph_num_id(
+    paragraph: etree._Element,
+    styles: etree._Element | None,
+    level: int,
+) -> str | None:
+    num_pr = paragraph.find("./w:pPr/w:numPr", namespaces=NS)
+    if num_pr is None and styles is not None:
+        style_ids = paragraph.xpath(
+            "./w:pPr/w:pStyle/@w:val",
+            namespaces=NS,
+        )
+        seen: set[str] = set()
+        style_id = style_ids[0] if style_ids else None
+        while style_id is not None and style_id not in seen:
+            seen.add(style_id)
+            style_nodes = styles.xpath(
+                "./w:style[@w:styleId=$style_id]",
+                namespaces=NS,
+                style_id=style_id,
+            )
+            if len(style_nodes) != 1:
+                break
+            num_pr = style_nodes[0].find("./w:pPr/w:numPr", namespaces=NS)
+            if num_pr is not None:
+                break
+            based_on = style_nodes[0].xpath(
+                "./w:basedOn/@w:val",
+                namespaces=NS,
+            )
+            style_id = based_on[0] if based_on else None
+    if num_pr is None:
+        return None
+    levels = num_pr.xpath("./w:ilvl/@w:val", namespaces=NS)
+    try:
+        actual_level = int(levels[0]) if levels else 0
+    except ValueError:
+        return None
+    values = num_pr.xpath("./w:numId/@w:val", namespaces=NS)
+    return (
+        values[0]
+        if actual_level == level and values and values[0] != "0"
+        else None
+    )
+
+
+def _numbering_level(
+    numbering: etree._Element,
+    num_id: str,
+    level: int,
+) -> etree._Element | None:
+    nums = numbering.xpath(
+        "./w:num[@w:numId=$num_id]",
+        namespaces=NS,
+        num_id=num_id,
+    )
+    if len(nums) != 1:
+        return None
+    overrides = nums[0].xpath(
+        "./w:lvlOverride[@w:ilvl=$level]/w:lvl",
+        namespaces=NS,
+        level=str(level),
+    )
+    if overrides:
+        return overrides[0]
+    abstract_ids = nums[0].xpath(
+        "./w:abstractNumId/@w:val",
+        namespaces=NS,
+    )
+    if len(abstract_ids) != 1:
+        return None
+    levels = numbering.xpath(
+        "./w:abstractNum[@w:abstractNumId=$abstract_id]"
+        "/w:lvl[@w:ilvl=$level]",
+        namespaces=NS,
+        abstract_id=abstract_ids[0],
+        level=str(level),
+    )
+    return levels[0] if len(levels) == 1 else None
+
+
+def _numbering_level_compatible(
+    level_node: etree._Element,
+    role: str,
+    level: int,
+    profile: FormatProfile,
+) -> bool:
+    profile_rule = {
+        "heading_1": profile.numbering.chapters,
+        "heading_2": profile.numbering.sections,
+        "heading_3": profile.numbering.sections,
+        "appendix_heading": profile.numbering.appendices,
+    }[role]
+    expected_format = {
+        "chinese_chapter": "chineseCounting",
+        "decimal": "decimal",
+        "upper_alpha": "upperLetter",
+    }.get(profile_rule.format)
+    if level_node.xpath(
+        "string(./w:numFmt/@w:val)", namespaces=NS
+    ) != expected_format:
+        return False
+    expected_core = {
+        "chinese_chapter": "第%1章",
+        "upper_alpha": "附录 %1",
+        "decimal": profile_rule.separator.join(
+            f"%{index}" for index in range(1, level + 2)
+        ),
+    }.get(profile_rule.format)
+    level_text = level_node.xpath(
+        "string(./w:lvlText/@w:val)", namespaces=NS
+    )
+    suffix = {
+        "space": " ",
+        "tab": "\t",
+        "nothing": "",
+    }.get(
+        level_node.xpath("string(./w:suff/@w:val)", namespaces=NS),
+        "\t",
+    )
+    if profile_rule.format == "decimal":
+        if level_text != expected_core:
+            return False
+    elif not (
+        level_text == f"{expected_core}{profile_rule.separator}"
+        or (
+            level_text == expected_core
+            and suffix == profile_rule.separator
+        )
+    ):
+        return False
+    restart = level_node.xpath(
+        "string(./w:lvlRestart/@w:val)", namespaces=NS
+    ) or None
+    if profile_rule.restart_scope == "document":
+        if restart not in {None, "0"}:
+            return False
+    elif profile_rule.restart_scope == "chapter":
+        if level == 0 or restart not in {None, "1"}:
+            return False
+    elif profile_rule.restart_scope == "appendix":
+        if restart is None:
+            return False
+    else:
+        return False
+    styles = level_node.xpath("./w:pStyle/@w:val", namespaces=NS)
+    return not styles or any(
+        styles[0].casefold() == name.casefold()
+        for name in profile.styles[role].word_styles
+    )
+
+
+def _existing_sequence(
+    numbering: etree._Element,
+    paragraphs: list[etree._Element],
+    styles: etree._Element | None,
+    semantic: SemanticDocument,
+    profile: FormatProfile,
+    roles: set[str],
+    required_roles: set[str],
+    *,
+    warning_name: str,
+) -> tuple[str | None, bool]:
+    num_roles: dict[str, set[str]] = {}
+    for paragraph, node in zip(paragraphs, semantic.paragraphs, strict=True):
+        if node.role not in roles:
+            continue
+        level = 0 if node.role == "appendix_heading" else int(node.role[-1]) - 1
+        num_id = _paragraph_num_id(paragraph, styles, level)
+        if num_id is not None:
+            num_roles.setdefault(num_id, set()).add(node.role)
+    if not num_roles:
+        return None, False
+    compatible = all(
+        all(
+            (
+                level_node := _numbering_level(
+                    numbering,
+                    num_id,
+                    0 if role == "appendix_heading" else int(role[-1]) - 1,
+                )
+            )
+            is not None
+            and _numbering_level_compatible(
+                level_node,
+                role,
+                0 if role == "appendix_heading" else int(role[-1]) - 1,
+                profile,
+            )
+            for role in observed_roles | required_roles
+        )
+        for num_id, observed_roles in num_roles.items()
+    )
+    if compatible and len(num_roles) == 1:
+        return next(iter(num_roles)), False
+    warnings.warn(
+        f"Skipping repair because incompatible {warning_name} numbering "
+        "sequences are present or the sequence is ambiguous.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+    return None, True
+
+
+_SEQ_FIELD = re.compile(
+    r"(?i)(\bSEQ\s+)(?:\"([^\"]+)\"|([^\s\\]+))"
+)
+
+
+@dataclass
+class _FieldCode:
+    instruction: str
+    simple: etree._Element | None = None
+    parts: tuple[etree._Element, ...] = ()
+
+    def set_sequence_identifier(self, identifier: str) -> None:
+        replacement = _replace_sequence_identifier(
+            self.instruction,
+            identifier,
+        )
+        if self.simple is not None:
+            self.simple.set(f"{W}instr", replacement)
+        elif self.parts:
+            remaining = replacement
+            for part in self.parts[:-1]:
+                length = len(part.text or "")
+                part.text = remaining[:length]
+                remaining = remaining[length:]
+            self.parts[-1].text = remaining
+        self.instruction = replacement
+
+
+@dataclass
+class _ComplexField:
+    parts: list[etree._Element]
+    collecting: bool = True
+    emitted: bool = False
+
+
+def _field_codes(paragraph: etree._Element) -> list[_FieldCode]:
+    result: list[_FieldCode] = []
+    complex_fields: list[_ComplexField] = []
+
+    def emit(field: _ComplexField) -> None:
+        if field.emitted:
+            return
+        instruction = "".join(part.text or "" for part in field.parts)
+        if instruction.strip():
+            result.append(_FieldCode(instruction, parts=tuple(field.parts)))
+        field.emitted = True
+
+    for descendant in paragraph.iter():
+        name = etree.QName(descendant).localname
+        if name == "fldSimple":
+            instruction = descendant.get(f"{W}instr")
+            if instruction and instruction.strip():
+                result.append(_FieldCode(instruction, simple=descendant))
+        elif name == "fldChar":
+            field_type = descendant.get(f"{W}fldCharType")
+            if field_type == "begin":
+                complex_fields.append(_ComplexField([]))
+            elif field_type == "separate" and complex_fields:
+                emit(complex_fields[-1])
+                complex_fields[-1].collecting = False
+            elif field_type == "end" and complex_fields:
+                emit(complex_fields.pop())
+        elif (
+            name == "instrText"
+            and complex_fields
+            and complex_fields[-1].collecting
+        ):
+            complex_fields[-1].parts.append(descendant)
+    for field in complex_fields:
+        emit(field)
+    return result
+
+
+def _sequence_identifier(instruction: str) -> str | None:
+    match = _SEQ_FIELD.search(instruction)
+    return (match.group(2) or match.group(3)) if match is not None else None
+
+
+def _replace_sequence_identifier(instruction: str, identifier: str) -> str:
+    return _SEQ_FIELD.sub(
+        lambda match: f'{match.group(1)}{identifier}',
+        instruction,
+        count=1,
+    )
+
+
+def _caption_sequence_identifiers(
+    paragraphs: list[etree._Element],
+    semantic: SemanticDocument,
+    roles: set[str],
+) -> tuple[dict[str, str], set[str]]:
+    chosen: dict[str, str] = {}
+    blocked: set[str] = set()
+    accepted = {
+        "figure_caption": {"figure", "图"},
+        "table_caption": {"table", "表"},
+    }
+    for role, identifiers in accepted.items():
+        if role not in roles:
+            continue
+        fields: list[_FieldCode] = []
+        values: list[str] = []
+        for paragraph, node in zip(paragraphs, semantic.paragraphs, strict=True):
+            if node.role != role:
+                continue
+            for field in _field_codes(paragraph):
+                identifier = _sequence_identifier(field.instruction)
+                if identifier is not None:
+                    fields.append(field)
+                    values.append(identifier)
+        if not values:
+            continue
+        accepted_folded = {value.casefold() for value in identifiers}
+        if any(value.casefold() not in accepted_folded for value in values):
+            label = "figure" if role == "figure_caption" else "table"
+            warnings.warn(
+                f"Skipping repair because incompatible {label} caption "
+                "SEQ identifiers are present.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+            blocked.add(role)
+            continue
+        selected = values[0]
+        chosen[role] = selected
+        for field in fields:
+            field.set_sequence_identifier(selected)
+    return chosen, blocked
+
+
 def _caption_numbering_runs(
     role: str,
     profile: FormatProfile,
+    sequence_identifier: str,
 ) -> list[etree._Element]:
     label = "图" if role == "figure_caption" else "表"
     result: list[etree._Element] = []
@@ -284,7 +620,12 @@ def _caption_numbering_runs(
     separator_text.text = separator
     separator_run.append(separator_text)
     result.append(separator_run)
-    result.extend(_field_runs(f"SEQ {label} \\s 1 \\* ARABIC", "1"))
+    result.extend(
+        _field_runs(
+            f"SEQ {sequence_identifier} \\s 1 \\* ARABIC",
+            "1",
+        )
+    )
     return result
 
 
@@ -293,6 +634,7 @@ def _replace_caption_token(
     role: str,
     profile: FormatProfile,
     token: str,
+    sequence_identifier: str,
 ) -> bool:
     text_nodes = paragraph.xpath(".//w:t", namespaces=NS)
     full_text = "".join(text.text or "" for text in text_nodes)
@@ -338,7 +680,9 @@ def _replace_caption_token(
         value = text.text or ""
         local_end = min(len(value), end - start)
         text.text = value[local_end:]
-    for replacement in reversed(_caption_numbering_runs(role, profile)):
+    for replacement in reversed(
+        _caption_numbering_runs(role, profile, sequence_identifier)
+    ):
         paragraph.insert(first_index, replacement)
     return True
 
@@ -346,6 +690,7 @@ def _replace_caption_token(
 def repair_numbering(
     document: etree._Element,
     numbering: etree._Element,
+    styles: etree._Element | None,
     semantic: SemanticDocument,
     profile: FormatProfile,
     findings: list[dict[str, object]],
@@ -375,14 +720,68 @@ def repair_numbering(
         ):
             continue
         eligible.append((finding, node))
-    context = _install_numbering(
+    needs_heading = any(
+        node.role in {"heading_1", "heading_2", "heading_3"}
+        for _, node in eligible
+    )
+    needs_appendix = any(
+        node.role == "appendix_heading" for _, node in eligible
+    )
+    required_heading_roles = {
+        node.role
+        for _, node in eligible
+        if node.role in {"heading_1", "heading_2", "heading_3"}
+    }
+    heading_num_id, heading_blocked = (
+        _existing_sequence(
+            numbering,
+            paragraphs,
+            styles,
+            semantic,
+            profile,
+            {"heading_1", "heading_2", "heading_3"},
+            required_heading_roles,
+            warning_name="heading",
+        )
+        if needs_heading
+        else (None, False)
+    )
+    appendix_num_id, appendix_blocked = (
+        _existing_sequence(
+            numbering,
+            paragraphs,
+            styles,
+            semantic,
+            profile,
+            {"appendix_heading"},
+            {"appendix_heading"},
+            warning_name="appendix",
+        )
+        if needs_appendix
+        else (None, False)
+    )
+    installed = _install_numbering(
         numbering,
         profile,
-        heading=any(
-            node.role in {"heading_1", "heading_2", "heading_3"}
-            for _, node in eligible
+        heading=needs_heading and heading_num_id is None and not heading_blocked,
+        appendix=(
+            needs_appendix
+            and appendix_num_id is None
+            and not appendix_blocked
         ),
-        appendix=any(node.role == "appendix_heading" for _, node in eligible),
+    )
+    context = _NumberingContext(
+        heading_num_id or installed.heading_num_id,
+        appendix_num_id or installed.appendix_num_id,
+    )
+    caption_identifiers, blocked_caption_roles = _caption_sequence_identifiers(
+        paragraphs,
+        semantic,
+        {
+            node.role
+            for _, node in eligible
+            if node.role in {"figure_caption", "table_caption"}
+        },
     )
     for finding, node in eligible:
         rule_id = str(finding["rule_id"])
@@ -404,11 +803,18 @@ def repair_numbering(
             _strip_token(paragraph, node.manual_number_token)
             _set_num_pr(paragraph, 0, context.appendix_num_id)
         elif node.role in {"figure_caption", "table_caption"}:
+            if node.role in blocked_caption_roles:
+                continue
+            sequence_identifier = caption_identifiers.get(
+                node.role,
+                "图" if node.role == "figure_caption" else "表",
+            )
             if node.manual_number_token is None or not _replace_caption_token(
                 paragraph,
                 node.role,
                 profile,
                 node.manual_number_token,
+                sequence_identifier,
             ):
                 continue
         repaired.add(f"{rule_id}|{location}")

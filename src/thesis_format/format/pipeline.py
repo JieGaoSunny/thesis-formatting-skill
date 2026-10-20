@@ -377,6 +377,11 @@ def format_document(
         repaired |= repair_numbering(
             document,
             package.xml("word/numbering.xml"),
+            (
+                package.xml("word/styles.xml")
+                if "word/styles.xml" in package.parts
+                else None
+            ),
             semantic,
             profile,
             findings,

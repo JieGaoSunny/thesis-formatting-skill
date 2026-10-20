@@ -39,6 +39,85 @@ NS = {
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
 
+def _add_heading_numbering(
+    path: Path,
+    *,
+    num_id: str,
+    abstract_id: str,
+    chapter_format: str = "chineseCounting",
+) -> None:
+    package = OoxmlPackage.open(path)
+    numbering = package.xml("word/numbering.xml")
+    abstract = etree.Element(
+        f"{{{NS['w']}}}abstractNum",
+        {f"{{{NS['w']}}}abstractNumId": abstract_id},
+    )
+    etree.SubElement(
+        abstract,
+        f"{{{NS['w']}}}multiLevelType",
+        {f"{{{NS['w']}}}val": "multilevel"},
+    )
+    for level, (number_format, level_text, style_id) in enumerate(
+        (
+            (chapter_format, "第%1章", "AppleHeading1"),
+            ("decimal", "%1.%2", "AppleHeading2"),
+            ("decimal", "%1.%2.%3", "AppleHeading3"),
+        )
+    ):
+        level_node = etree.SubElement(
+            abstract,
+            f"{{{NS['w']}}}lvl",
+            {f"{{{NS['w']}}}ilvl": str(level)},
+        )
+        etree.SubElement(
+            level_node,
+            f"{{{NS['w']}}}start",
+            {f"{{{NS['w']}}}val": "1"},
+        )
+        etree.SubElement(
+            level_node,
+            f"{{{NS['w']}}}numFmt",
+            {f"{{{NS['w']}}}val": number_format},
+        )
+        etree.SubElement(
+            level_node,
+            f"{{{NS['w']}}}pStyle",
+            {f"{{{NS['w']}}}val": style_id},
+        )
+        etree.SubElement(
+            level_node,
+            f"{{{NS['w']}}}suff",
+            {f"{{{NS['w']}}}val": "space" if level == 0 else "nothing"},
+        )
+        etree.SubElement(
+            level_node,
+            f"{{{NS['w']}}}lvlText",
+            {f"{{{NS['w']}}}val": level_text},
+        )
+        if level:
+            etree.SubElement(
+                level_node,
+                f"{{{NS['w']}}}lvlRestart",
+                {f"{{{NS['w']}}}val": "1"},
+            )
+    first_num = numbering.find("w:num", namespaces=NS)
+    numbering.insert(
+        numbering.index(first_num) if first_num is not None else len(numbering),
+        abstract,
+    )
+    number = etree.Element(
+        f"{{{NS['w']}}}num",
+        {f"{{{NS['w']}}}numId": num_id},
+    )
+    etree.SubElement(
+        number,
+        f"{{{NS['w']}}}abstractNumId",
+        {f"{{{NS['w']}}}val": abstract_id},
+    )
+    numbering.append(number)
+    package.write(path, {"word/numbering.xml": numbering})
+
+
 @pytest.mark.parametrize(
     ("defect_name", "repaired_rule"),
     (
@@ -501,7 +580,7 @@ def test_second_table_caption_uses_second_table_occurrence_hash(
     assert change["object_occurrence_sha256"] == table_hashes[1]
 
 
-def test_numbering_repair_allocates_collision_safe_owned_ids_without_changing_lists(
+def test_numbering_repair_reuses_compatible_ids_without_changing_lists(
     tmp_path: Path,
 ) -> None:
     source = build_template(tmp_path / "numbering-collision.docx", PROFILE)
@@ -564,6 +643,15 @@ def test_numbering_repair_allocates_collision_safe_owned_ids_without_changing_li
         )
         for identifier in ("910", "911")
     }
+    existing_heading_num_ids = package.xml("word/document.xml").xpath(
+        ".//w:p[w:pPr/w:pStyle["
+        "@w:val='AppleHeading1' or @w:val='AppleHeading2' "
+        "or @w:val='AppleHeading3']]"
+        "/w:pPr/w:numPr/w:numId/@w:val",
+        namespaces=NS,
+    )
+    assert len(set(existing_heading_num_ids)) == 1
+    existing_heading_num_id = existing_heading_num_ids[0]
     package.write(source, {"word/numbering.xml": numbering})
 
     output = tmp_path / "formatted.docx"
@@ -592,17 +680,231 @@ def test_numbering_repair_allocates_collision_safe_owned_ids_without_changing_li
         "[1]/w:pPr/w:numPr/w:numId/@w:val)",
         namespaces=NS,
     )
-    assert heading_num_id not in {"", "910", "911"}
+    assert heading_num_id == existing_heading_num_id
     abstract_id = result_numbering.xpath(
         "string(./w:num[@w:numId=$num_id]/w:abstractNumId/@w:val)",
         namespaces=NS,
         num_id=heading_num_id,
     )
-    assert result_numbering.xpath(
+    assert not result_numbering.xpath(
         "./w:abstractNum[@w:abstractNumId=$abstract_id]"
         "[w:nsid[@w:val='54464844']][w:tmpl[@w:val='48454144']]",
         namespaces=NS,
         abstract_id=abstract_id,
+    )
+
+
+def test_manual_chapter_reuses_existing_automatic_heading_sequence(
+    tmp_path: Path,
+) -> None:
+    source = build_docx(
+        tmp_path / "shared-heading-sequence.docx",
+        [
+            {
+                "text": "绪论",
+                "style": "AppleHeading1",
+                "numbering_level": 0,
+                "numbering_num_id": 901,
+                "outline_level": 0,
+            },
+            {"text": "第二章 方法", "style": "AppleHeading1"},
+        ],
+    )
+    _add_heading_numbering(source, num_id="901", abstract_id="901")
+
+    output = tmp_path / "formatted.docx"
+    format_document(source, output, PROFILE, clock=lambda: NOW)
+
+    document = OoxmlPackage.open(output).xml("word/document.xml")
+    heading_num_ids = document.xpath(
+        ".//w:p[w:pPr/w:pStyle[@w:val='AppleHeading1']]"
+        "/w:pPr/w:numPr/w:numId/@w:val",
+        namespaces=NS,
+    )
+    assert heading_num_ids == ["901", "901"]
+    assert not OoxmlPackage.open(output).xml("word/numbering.xml").xpath(
+        "./w:abstractNum[w:nsid[@w:val='54464844']]",
+        namespaces=NS,
+    )
+
+
+def test_manual_caption_reuses_existing_accepted_figure_sequence_identifier(
+    tmp_path: Path,
+) -> None:
+    source = build_docx(
+        tmp_path / "shared-caption-sequence.docx",
+        [
+            {
+                "text": "图 苹果树",
+                "style": "AppleFigureCaption",
+                "field": " SEQ Figure \\s 1 \\* ARABIC ",
+            },
+            {"text": "图 1-2 梨树", "style": "AppleFigureCaption"},
+        ],
+    )
+
+    output = tmp_path / "formatted.docx"
+    format_document(source, output, PROFILE, clock=lambda: NOW)
+
+    document = OoxmlPackage.open(output).xml("word/document.xml")
+    sequence_fields = [
+        " ".join(value.split())
+        for value in document.xpath(
+            ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+            "//w:instrText/text()",
+            namespaces=NS,
+        )
+        if value.strip().upper().startswith("SEQ ")
+    ]
+    assert len(sequence_fields) == 2
+    assert all(field.startswith("SEQ Figure ") for field in sequence_fields)
+    assert not any(field.startswith("SEQ 图 ") for field in sequence_fields)
+
+
+@pytest.mark.parametrize("representation", ("split", "simple"))
+def test_manual_caption_reuses_accepted_identifier_from_valid_field_forms(
+    tmp_path: Path,
+    representation: str,
+) -> None:
+    source = build_docx(
+        tmp_path / f"{representation}-caption-sequence.docx",
+        [
+            {
+                "text": "图 苹果树",
+                "style": "AppleFigureCaption",
+                "field": " SEQ Figure \\s 1 \\* ARABIC ",
+            },
+            {"text": "图 1-2 梨树", "style": "AppleFigureCaption"},
+        ],
+    )
+    package = OoxmlPackage.open(source)
+    document = package.xml("word/document.xml")
+    first_caption = document.xpath(
+        ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']][1]",
+        namespaces=NS,
+    )[0]
+    instruction = first_caption.find(".//w:instrText", namespaces=NS)
+    assert instruction is not None
+    if representation == "split":
+        original = instruction.text or ""
+        instruction.text = " SEQ "
+        continuation = etree.Element(f"{{{NS['w']}}}instrText")
+        continuation.text = original[len(" SEQ ") :]
+        instruction.addnext(continuation)
+    else:
+        field_run = instruction.getparent()
+        assert field_run is not None
+        first_caption.remove(field_run)
+        simple = etree.Element(
+            f"{{{NS['w']}}}fldSimple",
+            {f"{{{NS['w']}}}instr": " SEQ Figure \\s 1 \\* ARABIC "},
+        )
+        run = etree.SubElement(simple, f"{{{NS['w']}}}r")
+        etree.SubElement(run, f"{{{NS['w']}}}t").text = "1"
+        first_caption.append(simple)
+    package.write(source, {"word/document.xml": document})
+
+    output = tmp_path / "formatted.docx"
+    format_document(source, output, PROFILE, clock=lambda: NOW)
+
+    result = OoxmlPackage.open(output).xml("word/document.xml")
+    field_text = " ".join(
+        result.xpath(
+            "string(.//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]"
+            "[2]//w:instrText[contains(., 'SEQ')])",
+            namespaces=NS,
+        ).split()
+    )
+    assert field_text.startswith("SEQ Figure ")
+
+
+def test_manual_caption_skips_incompatible_existing_sequence_identifier(
+    tmp_path: Path,
+) -> None:
+    source = build_docx(
+        tmp_path / "incompatible-caption-sequence.docx",
+        [
+            {
+                "text": "图 苹果树",
+                "style": "AppleFigureCaption",
+                "field": " SEQ Figure \\s 1 \\* ARABIC ",
+            },
+            {
+                "text": "图 梨树",
+                "style": "AppleFigureCaption",
+                "field": " SEQ Fig \\s 1 \\* ARABIC ",
+            },
+            {"text": "图 1-3 桃树", "style": "AppleFigureCaption"},
+        ],
+    )
+
+    output = tmp_path / "formatted.docx"
+    with pytest.warns(
+        RuntimeWarning,
+        match="incompatible figure caption SEQ identifiers",
+    ):
+        report = format_document(source, output, PROFILE, clock=lambda: NOW)
+
+    result = OoxmlPackage.open(output).xml("word/document.xml")
+    captions = result.xpath(
+        ".//w:p[w:pPr/w:pStyle[@w:val='AppleFigureCaption']]",
+        namespaces=NS,
+    )
+    assert "图 1-3" in "".join(captions[2].xpath(".//w:t/text()", namespaces=NS))
+    assert not captions[2].xpath(".//w:instrText", namespaces=NS)
+    assert any(
+        change["rule_id"] == "NUMBERING.MANUAL_CAPTION"
+        and change["status"] == "skipped"
+        for change in report["changes"]
+    )
+
+
+def test_manual_heading_skips_incompatible_existing_numbering_sequences(
+    tmp_path: Path,
+) -> None:
+    source = build_docx(
+        tmp_path / "mixed-heading-sequences.docx",
+        [
+            {
+                "text": "绪论",
+                "style": "AppleHeading1",
+                "numbering_level": 0,
+                "numbering_num_id": 901,
+                "outline_level": 0,
+            },
+            {
+                "text": "方法",
+                "style": "AppleHeading1",
+                "numbering_level": 0,
+                "numbering_num_id": 902,
+                "outline_level": 0,
+            },
+            {"text": "第三章 结果", "style": "AppleHeading1"},
+        ],
+    )
+    _add_heading_numbering(source, num_id="901", abstract_id="901")
+    _add_heading_numbering(
+        source,
+        num_id="902",
+        abstract_id="902",
+        chapter_format="decimal",
+    )
+
+    output = tmp_path / "formatted.docx"
+    with pytest.warns(RuntimeWarning, match="incompatible heading numbering"):
+        report = format_document(source, output, PROFILE, clock=lambda: NOW)
+
+    document = OoxmlPackage.open(output).xml("word/document.xml")
+    manual = document.xpath(
+        ".//w:p[w:pPr/w:pStyle[@w:val='AppleHeading1']][3]",
+        namespaces=NS,
+    )[0]
+    assert not manual.xpath("./w:pPr/w:numPr", namespaces=NS)
+    assert "第三章" in "".join(manual.xpath(".//w:t/text()", namespaces=NS))
+    assert any(
+        change["rule_id"] == "NUMBERING.MANUAL_HEADING"
+        and change["status"] == "skipped"
+        for change in report["changes"]
     )
 
 
