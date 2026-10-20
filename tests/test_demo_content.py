@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import re
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -27,6 +28,7 @@ from thesis_format.demo import (
     sensitivity_envelope,
 )
 from thesis_format.demo import figures as demo_figures
+from thesis_format.demo import study as demo_study
 
 
 def _all_paragraph_text(thesis: Thesis) -> str:
@@ -181,6 +183,34 @@ def test_reported_estimates_biases_cvs_and_sensitivity_are_recomputed() -> None:
     assert "置信区间" not in thesis_text
 
 
+def test_leave_one_layer_out_is_recomputed_from_full_dataset_and_exposed() -> None:
+    results = demo_study.leave_one_layer_out(
+        SIMULATED_OBSERVATIONS, DEFAULT_SCALE_INPUTS
+    )
+
+    assert tuple(results) == ("上层", "中层", "下层")
+    assert results["上层"].rounded_estimate == 4737
+    assert results["上层"].rounded_change == 451
+    assert results["中层"].rounded_estimate == 3989
+    assert results["中层"].rounded_change == -297
+    assert results["下层"].rounded_estimate == 4025
+    assert results["下层"].rounded_change == -261
+
+    thesis_text = _all_paragraph_text(build_demo_thesis())
+    for reported in ("+451", "-297", "-261"):
+        assert reported in thesis_text
+    assert "下层后变化较小" not in thesis_text
+    assert "中层承担了主要信息量" not in thesis_text
+
+
+def test_sensitivity_is_named_multi_factor_scenario_envelope_everywhere() -> None:
+    thesis_text = _all_paragraph_text(build_demo_thesis())
+
+    assert "多因素情景敏感性包络" in thesis_text
+    assert "单因素" not in thesis_text
+    assert "one-factor-at-a-time" not in inspect.getdoc(sensitivity_envelope)
+
+
 def test_figures_have_chinese_labels_and_accessible_alt_text() -> None:
     thesis = build_demo_thesis()
 
@@ -222,6 +252,43 @@ def test_missing_cjk_font_raises_clear_error(
 
     with pytest.raises(FigureFontError, match="THESIS_FIGURE_FONT"):
         resolve_cjk_font()
+
+
+def test_partial_font_missing_any_diagram_label_glyph_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    required = {
+        character
+        for labels in demo_figures.DIAGRAM_LABEL_SETS
+        for label in labels
+        for character in label
+        if not character.isascii()
+    }
+    omitted = "围"
+    assert omitted in required
+
+    class Mask(bytes):
+        def getbbox(self) -> tuple[int, int, int, int] | None:
+            return (0, 0, 1, 1) if self else None
+
+    class PartialFont:
+        path = "partial-font.ttf"
+
+        def getmask(self, character: str) -> Mask:
+            if character in {"\u0378", omitted}:
+                return Mask(b"missing")
+            return Mask(character.encode("utf-8"))
+
+    font_path = tmp_path / "partial-font.ttf"
+    font_path.write_bytes(b"mock")
+    monkeypatch.setattr(
+        demo_figures.ImageFont,
+        "truetype",
+        lambda *_args, **_kwargs: PartialFont(),
+    )
+
+    with pytest.raises(FigureFontError, match="required Chinese glyphs"):
+        resolve_cjk_font(font_path)
 
 
 def test_demo_figures_are_deterministic_pngs(tmp_path: Path) -> None:

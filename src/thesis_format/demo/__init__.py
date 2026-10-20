@@ -14,11 +14,13 @@ from .figures import Figure, FigureFontError, generate_demo_figures, resolve_cjk
 from .study import (
     DEFAULT_SCALE_INPUTS,
     SIMULATED_OBSERVATIONS,
+    LayerOmissionSummary,
     MethodSummary,
     Observation,
     ScaleInputs,
     SensitivityEnvelope,
     calculate_reported_statistics,
+    leave_one_layer_out,
     sensitivity_envelope,
 )
 
@@ -29,6 +31,7 @@ __all__ = [
     "FigureFontError",
     "DEFAULT_SCALE_INPUTS",
     "SIMULATED_OBSERVATIONS",
+    "LayerOmissionSummary",
     "MethodSummary",
     "Observation",
     "Paragraph",
@@ -41,6 +44,7 @@ __all__ = [
     "build_demo_thesis",
     "calculate_reported_statistics",
     "generate_demo_figures",
+    "leave_one_layer_out",
     "resolve_cjk_font",
     "sensitivity_envelope",
 ]

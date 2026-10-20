@@ -9,6 +9,7 @@ from .study import (
     DEFAULT_SCALE_INPUTS,
     SIMULATED_OBSERVATIONS,
     calculate_reported_statistics,
+    leave_one_layer_out,
     sensitivity_envelope,
 )
 
@@ -96,6 +97,9 @@ def build_demo_thesis() -> Thesis:
         SIMULATED_OBSERVATIONS, DEFAULT_SCALE_INPUTS
     )
     sensitivity = sensitivity_envelope(
+        SIMULATED_OBSERVATIONS, DEFAULT_SCALE_INPUTS
+    )
+    layer_omissions = leave_one_layer_out(
         SIMULATED_OBSERVATIONS, DEFAULT_SCALE_INPUTS
     )
     simple = statistics["simple"]
@@ -289,9 +293,9 @@ def build_demo_thesis() -> Thesis:
                 Section(
                     "不确定性与敏感性分析",
                     _paragraphs(
-                        "不确定性分析依次扰动可见比例、层权重和基础计数。可见比例在各层设定值上下变化0.03，层权重在保持总和为1的条件下把0.02从一层转移到另一层，基础计数则对每个样方增加或减少一片。每次只改变一类参数，其余保持不变，以便解释结果对单一假设的敏感程度。",
-                        f"虚构误差传播指南主张把参数范围与数据来源并列报告，而不只给出最终区间[5]。按照这一原则，本案例的单因素确定性扰动得到{sensitivity.rounded_bounds[0]}至{sensitivity.rounded_bounds[1]}片的敏感性区间，其中可见比例组合、层间0.02权重转移和每个样方基础计数增减1片均按附录公式重新计算。该区间不表示某一概率覆盖率，只是预设情景下的敏感性包络。",
-                        "留一层分析进一步检验结构依赖。去除上层后重新归一权重，估计密度略升；去除中层后估计明显下降；去除下层后变化较小。这说明中层承担了主要信息量，也暴露出当前设计对中层参数依赖较强。若要在后续虚构实验中降低这种依赖，应优先增加中层样方，而不是平均增加所有层的样方。",
+                        "多因素情景敏感性包络包含三类确定性情景。可见比例情景取三层各自上下0.03的笛卡尔积，因此每个情景同时扰动三层比例；层权重情景在保持总和为1的条件下把0.02从一层转移到另一层；基础计数情景则同时对每个样方增加或减少一片。三类情景分别重新计算整株结果，用于描述预设组合下的结果范围。",
+                        f"虚构误差传播指南主张把参数范围与数据来源并列报告，而不只给出最终区间[5]。按照这一原则，本案例的多因素情景敏感性包络为{sensitivity.rounded_bounds[0]}至{sensitivity.rounded_bounds[1]}片，其中可见比例组合、层间0.02权重转移和每个样方基础计数增减1片均按附录公式重新计算。该区间不表示某一概率覆盖率，只是预设情景组合下的确定性包络。",
+                        f"留一层分析以完整数据的4286片为基准，去除一层后使用其余两层的全部观测并重新归一权重。去除上层时估计变为{layer_omissions['上层'].rounded_estimate}片，变化为{layer_omissions['上层'].rounded_change:+d}片；去除中层时变为{layer_omissions['中层'].rounded_estimate}片，变化为{layer_omissions['中层'].rounded_change:+d}片；去除下层时变为{layer_omissions['下层'].rounded_estimate}片，变化为{layer_omissions['下层'].rounded_change:+d}片。上层观测在当前加权组合中拉低整株估计，中层和下层观测则都拉高整株估计，且三个删除情景均产生数百片变化，不能据此声称下层影响很小或中层是唯一主要来源。",
                         f"综合偏差、重复变异与敏感性结果，本文把4286片作为演示推荐值，并将{sensitivity.rounded_bounds[0]}至{sensitivity.rounded_bounds[1]}片作为敏感性包络同时呈现。该表述避免把模拟真值当作现实标准，也不把敏感性区间解释为概率覆盖区间。所有数字均可由附录表A-2原始记录、表A-3输入和公式复算。",
                     ),
                 ),
@@ -343,7 +347,7 @@ def build_demo_thesis() -> Thesis:
         Reference(2, "果园模拟数据工作室", "教学数据中结构参数与观察参数的分离", 2022, "模拟农业数据评论，3(1)：35-49"),
         Reference(3, "叶片计数规则研究小组", "边界判定对方形样方计数一致性的影响", 2023, "虚构植物测量，8(4)：101-116"),
         Reference(4, "树冠统计课堂项目", "分层权重归一化的可复算示例", 2024, "苹果大学虚构教材出版社，演示城，第44-67页"),
-        Reference(5, "模拟误差传播委员会", "器官数量外推中的确定性敏感性分析", 2025, "虚构生物统计实践，2(3)：58-76"),
+        Reference(5, "模拟误差传播委员会", "器官数量外推中的多因素情景敏感性包络", 2025, "虚构生物统计实践，2(3)：58-76"),
         Reference(6, "开放演示资料编写组", "教学型研究文档的来源声明与复算规范", 2026, "苹果大学虚构教材出版社，演示城，第9-28页"),
     )
 

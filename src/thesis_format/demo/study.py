@@ -47,6 +47,15 @@ class SensitivityEnvelope:
     rounded_bounds: tuple[int, int]
 
 
+@dataclass(frozen=True, slots=True)
+class LayerOmissionSummary:
+    omitted_layer: str
+    estimate: float
+    rounded_estimate: int
+    change_from_full: float
+    rounded_change: int
+
+
 SIMULATED_OBSERVATIONS = (
     Observation("R1", "U-NE", "上层", "东北", (15, 16, 14, 15), 15),
     Observation("R1", "U-NW", "上层", "西北", (16, 17, 15, 16), 16),
@@ -163,7 +172,7 @@ def calculate_reported_statistics(
 def sensitivity_envelope(
     observations: Iterable[Observation], inputs: ScaleInputs
 ) -> SensitivityEnvelope:
-    """Return the one-factor-at-a-time deterministic sensitivity envelope."""
+    """Return the deterministic multi-factor scenario sensitivity envelope."""
 
     observations = tuple(observations)
     weights = dict(inputs.layer_weights)
@@ -215,3 +224,48 @@ def sensitivity_envelope(
         upper=upper,
         rounded_bounds=(round(lower), round(upper)),
     )
+
+
+def leave_one_layer_out(
+    observations: Iterable[Observation], inputs: ScaleInputs
+) -> dict[str, LayerOmissionSummary]:
+    """Recompute the corrected estimate after omitting each layer in turn."""
+
+    observations = tuple(observations)
+    full_estimate = fmean(
+        _round_estimates(observations, inputs)["corrected"]
+    )
+    weights = dict(inputs.layer_weights)
+    results: dict[str, LayerOmissionSummary] = {}
+
+    for omitted_layer in weights:
+        remaining_weights = {
+            layer: weight
+            for layer, weight in weights.items()
+            if layer != omitted_layer
+        }
+        remaining_total = sum(remaining_weights.values())
+        normalized_weights = {
+            layer: weight / remaining_total
+            for layer, weight in remaining_weights.items()
+        }
+        remaining_observations = tuple(
+            row for row in observations if row.layer != omitted_layer
+        )
+        estimate = fmean(
+            _round_estimates(
+                remaining_observations,
+                inputs,
+                layer_weights=normalized_weights,
+            )["corrected"]
+        )
+        change = estimate - full_estimate
+        results[omitted_layer] = LayerOmissionSummary(
+            omitted_layer=omitted_layer,
+            estimate=estimate,
+            rounded_estimate=round(estimate),
+            change_from_full=change,
+            rounded_change=round(change),
+        )
+
+    return results
