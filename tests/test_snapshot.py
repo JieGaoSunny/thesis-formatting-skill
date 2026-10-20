@@ -105,6 +105,20 @@ def _append_note_reference(paragraph, kind: str, note_id: int) -> None:
     run._r.append(reference)
 
 
+def _paragraph_with_note(
+    document: Document,
+    before: str,
+    kind: str,
+    note_id: int,
+    after: str,
+):
+    paragraph = document.add_paragraph()
+    paragraph.add_run(before)
+    _append_note_reference(paragraph, kind, note_id)
+    paragraph.add_run(after)
+    return paragraph
+
+
 def _add_notes_part(path: Path, kind: str, notes: dict[int, str]) -> None:
     replacement = path.with_suffix(f".{kind}-replacement.docx")
     entries = "".join(
@@ -341,6 +355,73 @@ def test_note_references_are_ordered_semantic_nodes_linked_to_note_content(
     )
 
 
+def test_note_references_record_normalized_offsets_and_same_offset_ordinals(
+    tmp_path: Path,
+) -> None:
+    before_document = Document()
+    paragraph = _paragraph_with_note(before_document, "Alpha", "footnote", 4, "Beta")
+    _append_note_reference(paragraph, "endnote", 7)
+    before_path = _save(before_document, tmp_path / "inline-note-before.docx")
+    _add_notes_part(before_path, "footnote", {4: "Footnote content"})
+    _add_notes_part(before_path, "endnote", {7: "Endnote content"})
+
+    before = extract_snapshot(before_path, PROFILE)
+    references = [
+        node
+        for node in before["body"]
+        if node["node_type"] in {"footnote_reference", "endnote_reference"}
+    ]
+    assert [
+        (
+            node["source_location"]["character_offset"],
+            node["source_location"]["same_offset_ordinal"],
+        )
+        for node in references
+    ] == [(5, 1), (9, 1)]
+
+    same_offset_document = Document()
+    adjacent = same_offset_document.add_paragraph("Alpha")
+    _append_note_reference(adjacent, "footnote", 4)
+    _append_note_reference(adjacent, "endnote", 7)
+    same_offset_path = _save(
+        same_offset_document, tmp_path / "same-offset-notes.docx"
+    )
+    _add_notes_part(same_offset_path, "footnote", {4: "Footnote content"})
+    _add_notes_part(same_offset_path, "endnote", {7: "Endnote content"})
+
+    same_offset = extract_snapshot(same_offset_path, PROFILE)
+    adjacent_references = [
+        node
+        for node in same_offset["body"]
+        if node["node_type"] in {"footnote_reference", "endnote_reference"}
+    ]
+    assert [
+        (
+            node["source_location"]["character_offset"],
+            node["source_location"]["same_offset_ordinal"],
+        )
+        for node in adjacent_references
+    ] == [(5, 1), (5, 2)]
+
+    after_document = Document()
+    moved = _paragraph_with_note(after_document, "AlphaB", "footnote", 4, "eta")
+    _append_note_reference(moved, "endnote", 7)
+    after_path = _save(after_document, tmp_path / "inline-note-after.docx")
+    _add_notes_part(after_path, "footnote", {4: "Footnote content"})
+    _add_notes_part(after_path, "endnote", {7: "Endnote content"})
+
+    comparison = compare_snapshots(before, extract_snapshot(after_path, PROFILE))
+
+    assert any(
+        difference["kind"] == "changed"
+        and difference["before"] is not None
+        and difference["before"]["node_type"] == "footnote_reference"
+        and difference["before"]["source_location"]["character_offset"] == 5
+        and difference["after"]["source_location"]["character_offset"] == 6
+        for difference in comparison["differences"]
+    )
+
+
 def test_table_identity_includes_shape_even_when_row_major_text_matches(
     tmp_path: Path,
 ) -> None:
@@ -411,6 +492,79 @@ def test_table_geometry_records_spans_merges_and_logical_coordinates(
         and geometry["v_merge"] == "continue"
         for geometry in geometries
     )
+
+
+def test_nested_tables_are_separate_objects_with_hierarchical_paths(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    outer = document.add_table(rows=1, cols=1)
+    outer.cell(0, 0).text = "Outer"
+    nested = outer.cell(0, 0).add_table(rows=2, cols=2)
+    nested.cell(0, 0).text = "A"
+    nested.cell(0, 1).text = "B"
+    nested.cell(1, 0).text = "Wide"
+    nested.cell(1, 0).merge(nested.cell(1, 1))
+
+    snapshot = extract_snapshot(
+        _save(document, tmp_path / "nested-table.docx"), PROFILE
+    )
+    cells = [node for node in snapshot["body"] if node["node_type"] == "table"]
+
+    assert [cell["normalized_text"] for cell in cells] == [
+        "Outer \ufffc",
+        "A",
+        "B",
+        "Wide",
+    ]
+    assert len({cell["relationship_hash"] for cell in cells}) == 2
+    outer_path = cells[0]["source_location"]["path"]
+    assert outer_path.endswith("/w:tbl[1]/w:tr[1]/w:tc[1]")
+    assert all(
+        cell["source_location"]["path"].startswith(f"{outer_path}/w:tbl[1]/")
+        for cell in cells[1:]
+    )
+    assert cells[3]["table_geometry"] == {
+        "row_count": 2,
+        "column_count": 2,
+        "row": 2,
+        "column": 1,
+        "grid_span": 2,
+        "v_merge": None,
+    }
+
+
+def test_nested_table_reshape_is_detected_without_changing_outer_table(
+    tmp_path: Path,
+) -> None:
+    before_document = Document()
+    before_outer = before_document.add_table(rows=1, cols=1)
+    before_outer.cell(0, 0).text = "Outer"
+    before_nested = before_outer.cell(0, 0).add_table(rows=2, cols=2)
+    after_document = Document()
+    after_outer = after_document.add_table(rows=1, cols=1)
+    after_outer.cell(0, 0).text = "Outer"
+    after_nested = after_outer.cell(0, 0).add_table(rows=1, cols=4)
+    for table in (before_nested, after_nested):
+        for cell, text in zip(
+            (cell for row in table.rows for cell in row.cells),
+            ("A", "B", "C", "D"),
+            strict=True,
+        ):
+            cell.text = text
+
+    before = extract_snapshot(
+        _save(before_document, tmp_path / "nested-2x2.docx"), PROFILE
+    )
+    after = extract_snapshot(
+        _save(after_document, tmp_path / "nested-1x4.docx"), PROFILE
+    )
+    before_cells = [node for node in before["body"] if node["node_type"] == "table"]
+    after_cells = [node for node in after["body"] if node["node_type"] == "table"]
+
+    assert before_cells[0]["relationship_hash"] == after_cells[0]["relationship_hash"]
+    assert before_cells[1]["relationship_hash"] != after_cells[1]["relationship_hash"]
+    assert compare_snapshots(before, after)["equivalent"] is False
 
 
 def test_duplicate_nodes_get_ordinals_and_prefix_collisions_extend() -> None:

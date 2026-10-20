@@ -34,6 +34,7 @@ R = f"{{{R_NS}}}"
 EXCLUDED_FIELDS = frozenset(
     {"TOC", "PAGE", "PAGEREF", "REF", "SEQ", "STYLEREF"}
 )
+OBJECT_MARKER = "\ufffc"
 
 
 def _field_name(instruction: str) -> str:
@@ -41,10 +42,17 @@ def _field_name(instruction: str) -> str:
     return match.group(1).upper() if match else ""
 
 
-def _paragraph_text(paragraph: etree._Element, *, exclude_results: bool) -> str:
+def _paragraph_text(
+    paragraph: etree._Element,
+    *,
+    exclude_results: bool,
+    stop_before: etree._Element | None = None,
+) -> str:
     pieces: list[str] = []
     stack: list[dict[str, object]] = []
     for descendant in paragraph.iter():
+        if descendant is stop_before:
+            break
         local = etree.QName(descendant).localname
         if local == "fldSimple":
             continue
@@ -123,8 +131,17 @@ def _field_role(paragraph: etree._Element) -> str | None:
 
 def _clean_paragraph(paragraph: etree._Element, profile: FormatProfile) -> str:
     visible = _paragraph_text(paragraph, exclude_results=False)
-    role = _paragraph_role(paragraph, visible, profile)
     filtered = _paragraph_text(paragraph, exclude_results=True)
+    return _clean_paragraph_text(paragraph, visible, filtered, profile)
+
+
+def _clean_paragraph_text(
+    paragraph: etree._Element,
+    visible: str,
+    filtered: str,
+    profile: FormatProfile,
+) -> str:
+    role = _paragraph_role(paragraph, visible, profile)
     cleaned = strip_manual_numbering(filtered, role, profile, evidence_text=visible)
     if role == "figure_caption" and cleaned.startswith("图 "):
         cleaned = normalize_text(cleaned[1:])
@@ -165,8 +182,20 @@ def _relationship_hash(
     return hashlib.sha256(package.parts[target]).hexdigest()
 
 
-def _location(part: str, path: str, index: int) -> dict[str, object]:
-    return {"part": part, "path": path, "index": index}
+def _location(
+    part: str,
+    path: str,
+    index: int,
+    *,
+    character_offset: int | None = None,
+    same_offset_ordinal: int | None = None,
+) -> dict[str, object]:
+    location: dict[str, object] = {"part": part, "path": path, "index": index}
+    if character_offset is not None:
+        location["character_offset"] = character_offset
+    if same_offset_ordinal is not None:
+        location["same_offset_ordinal"] = same_offset_ordinal
+    return location
 
 
 def _candidate(
@@ -179,10 +208,18 @@ def _candidate(
     *,
     note_id: str | None = None,
     table_geometry: dict[str, object] | None = None,
+    character_offset: int | None = None,
+    same_offset_ordinal: int | None = None,
 ) -> dict[str, object]:
     candidate: dict[str, object] = {
         "node_type": node_type,
-        "source_location": _location(part, path, index),
+        "source_location": _location(
+            part,
+            path,
+            index,
+            character_offset=character_offset,
+            same_offset_ordinal=same_offset_ordinal,
+        ),
         "normalized_text": text,
         "relationship_hash": relationship_hash,
     }
@@ -211,10 +248,16 @@ def _images(
     source_index: int,
     story: str,
     object_identities: _ObjectIdentities,
+    *,
+    exclude_nested_tables: bool = False,
 ) -> list[dict[str, object]]:
     relationships = _relationship_map(package.relationships(), part)
     result: list[dict[str, object]] = []
-    drawings = element.xpath(".//w:drawing", namespaces=NS)
+    drawings = [
+        drawing
+        for drawing in element.xpath(".//w:drawing", namespaces=NS)
+        if not exclude_nested_tables or _belongs_to_container(drawing, element)
+    ]
     for drawing_index, drawing in enumerate(drawings, start=1):
         doc_properties = drawing.xpath(".//wp:docPr", namespaces=NS)
         alt = ""
@@ -261,11 +304,17 @@ def _equations(
     part: str,
     base_path: str,
     source_index: int,
+    *,
+    exclude_nested_tables: bool = False,
 ) -> list[dict[str, object]]:
-    equations = element.xpath(
-        ".//m:oMathPara | .//m:oMath[not(ancestor::m:oMathPara)]",
-        namespaces=NS,
-    )
+    equations = [
+        equation
+        for equation in element.xpath(
+            ".//m:oMathPara | .//m:oMath[not(ancestor::m:oMathPara)]",
+            namespaces=NS,
+        )
+        if not exclude_nested_tables or _belongs_to_container(equation, element)
+    ]
     result: list[dict[str, object]] = []
     for equation_index, equation in enumerate(equations, start=1):
         text = normalize_text("".join(equation.xpath(".//m:t/text()", namespaces=NS)))
@@ -286,15 +335,50 @@ def _note_references(
     part: str,
     base_path: str,
     source_index: int,
+    profile: FormatProfile,
+    *,
+    exclude_nested_tables: bool = False,
 ) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     counts: Counter[str] = Counter()
+    offset_counts: Counter[tuple[int, int]] = Counter()
     for descendant in element.iter():
         local = etree.QName(descendant).localname
         if local not in {"footnoteReference", "endnoteReference"}:
             continue
+        if exclude_nested_tables and not _belongs_to_container(descendant, element):
+            continue
         kind = local.removesuffix("Reference")
         note_id = descendant.get(f"{W}id", "")
+        paragraph = next(
+            (
+                ancestor
+                for ancestor in descendant.iterancestors()
+                if etree.QName(ancestor).localname == "p"
+            ),
+            None,
+        )
+        if paragraph is None:
+            character_offset = 0
+            paragraph_key = id(element)
+        else:
+            visible = _paragraph_text(paragraph, exclude_results=False)
+            filtered_prefix = _paragraph_text(
+                paragraph,
+                exclude_results=True,
+                stop_before=descendant,
+            )
+            character_offset = len(
+                _clean_paragraph_text(
+                    paragraph,
+                    visible,
+                    filtered_prefix,
+                    profile,
+                )
+            )
+            paragraph_key = id(paragraph)
+        offset_key = (paragraph_key, character_offset)
+        offset_counts[offset_key] += 1
         counts[kind] += 1
         result.append(
             _candidate(
@@ -304,9 +388,36 @@ def _note_references(
                 f"{base_path}/w:{local}[{counts[kind]}]",
                 source_index + len(result),
                 note_id=note_id,
+                character_offset=character_offset,
+                same_offset_ordinal=offset_counts[offset_key],
             )
         )
     return result
+
+
+def _belongs_to_container(
+    descendant: etree._Element,
+    container: etree._Element,
+) -> bool:
+    for ancestor in descendant.iterancestors():
+        if ancestor is container:
+            return True
+        if etree.QName(ancestor).localname == "tbl":
+            return False
+    return False
+
+
+def _cell_text(cell: etree._Element, profile: FormatProfile) -> str:
+    pieces: list[str] = []
+    for child in cell:
+        local = etree.QName(child).localname
+        if local == "p":
+            text = _clean_paragraph(child, profile)
+            if text:
+                pieces.append(text)
+        elif local == "tbl":
+            pieces.append(OBJECT_MARKER)
+    return normalize_text(" ".join(pieces))
 
 
 def _table_cells(
@@ -328,12 +439,7 @@ def _table_cells(
             v_merge: str | None = None
             if merge_nodes:
                 v_merge = merge_nodes[0].get(f"{W}val") or "continue"
-            text = normalize_text(
-                " ".join(
-                    _clean_paragraph(paragraph, profile)
-                    for paragraph in cell.xpath(".//w:p", namespaces=NS)
-                )
-            )
+            text = _cell_text(cell, profile)
             geometry = {
                 "row_count": len(rows),
                 "column_count": 0,
@@ -365,6 +471,86 @@ def _table_cells(
         ],
     }
     return parsed, signature
+
+
+def _append_table_nodes(
+    result: list[dict[str, object]],
+    table: etree._Element,
+    package: OoxmlPackage,
+    profile: FormatProfile,
+    object_identities: _ObjectIdentities,
+    *,
+    part: str,
+    table_path: str,
+    story: str,
+) -> None:
+    cells, table_signature = _table_cells(table, profile)
+    table_identity = object_identities.identity(
+        canonical_sha256(table_signature), story, "table"
+    )
+    row_physical_columns: Counter[int] = Counter()
+    for cell, text, geometry in cells:
+        row_index = int(geometry["row"])
+        row_physical_columns[row_index] += 1
+        cell_path = (
+            f"{table_path}/w:tr[{row_index}]"
+            f"/w:tc[{row_physical_columns[row_index]}]"
+        )
+        result.append(
+            _candidate(
+                "table",
+                text,
+                part,
+                cell_path,
+                len(result),
+                table_identity,
+                table_geometry=geometry,
+            )
+        )
+        result.extend(
+            _note_references(
+                cell,
+                part,
+                cell_path,
+                len(result),
+                profile,
+                exclude_nested_tables=True,
+            )
+        )
+        result.extend(
+            _images(
+                cell,
+                package,
+                part,
+                cell_path,
+                len(result),
+                story,
+                object_identities,
+                exclude_nested_tables=True,
+            )
+        )
+        result.extend(
+            _equations(
+                cell,
+                part,
+                cell_path,
+                len(result),
+                exclude_nested_tables=True,
+            )
+        )
+        for nested_index, nested_table in enumerate(
+            cell.xpath("./w:tbl", namespaces=NS), start=1
+        ):
+            _append_table_nodes(
+                result,
+                nested_table,
+                package,
+                profile,
+                object_identities,
+                part=part,
+                table_path=f"{cell_path}/w:tbl[{nested_index}]",
+                story=story,
+            )
 
 
 def _story_nodes(
@@ -405,6 +591,7 @@ def _story_nodes(
                 "word/document.xml",
                 base_path,
                 source_index,
+                profile,
             )
             result.extend(references)
             source_index += len(references)
@@ -429,57 +616,17 @@ def _story_nodes(
             source_index += len(equations)
         elif local == "tbl":
             table_number += 1
-            cells, table_signature = _table_cells(child, profile)
-            table_hash = canonical_sha256(table_signature)
-            table_identity = object_identities.identity(table_hash, "body", "table")
-            row_physical_columns: Counter[int] = Counter()
-            for cell, text, geometry in cells:
-                row_index = int(geometry["row"])
-                row_physical_columns[row_index] += 1
-                cell_path = (
-                    f"/w:document/w:body/w:tbl[{table_number}]"
-                    f"/w:tr[{row_index}]/w:tc[{row_physical_columns[row_index]}]"
-                )
-                result.append(
-                    _candidate(
-                        "table",
-                        text,
-                        "word/document.xml",
-                        cell_path,
-                        source_index,
-                        table_identity,
-                        table_geometry=geometry,
-                    )
-                )
-                source_index += 1
-                references = _note_references(
-                    cell,
-                    "word/document.xml",
-                    cell_path,
-                    source_index,
-                )
-                result.extend(references)
-                source_index += len(references)
-                result.extend(
-                    _images(
-                        cell,
-                        package,
-                        "word/document.xml",
-                        cell_path,
-                        source_index,
-                        "body",
-                        object_identities,
-                    )
-                )
-                source_index = len(result)
-                equations = _equations(
-                    cell,
-                    "word/document.xml",
-                    cell_path,
-                    source_index,
-                )
-                result.extend(equations)
-                source_index += len(equations)
+            _append_table_nodes(
+                result,
+                child,
+                package,
+                profile,
+                object_identities,
+                part="word/document.xml",
+                table_path=f"/w:document/w:body/w:tbl[{table_number}]",
+                story="body",
+            )
+            source_index = len(result)
     return result
 
 
@@ -609,48 +756,16 @@ def _section_story_nodes(
                         f"/section[{section_index}]/{kind}[{reference_type}]"
                         f"/w:tbl[{table_number}]"
                     )
-                    cells, table_signature = _table_cells(child, profile)
-                    table_identity = object_identities.identity(
-                        canonical_sha256(table_signature), story, "table"
+                    _append_table_nodes(
+                        result,
+                        child,
+                        package,
+                        profile,
+                        object_identities,
+                        part=part,
+                        table_path=base_path,
+                        story=story,
                     )
-                    row_physical_columns: Counter[int] = Counter()
-                    for cell, text, geometry in cells:
-                        row_index = int(geometry["row"])
-                        row_physical_columns[row_index] += 1
-                        cell_path = (
-                            f"{base_path}/w:tr[{row_index}]"
-                            f"/w:tc[{row_physical_columns[row_index]}]"
-                        )
-                        result.append(
-                            _candidate(
-                                "table",
-                                text,
-                                part,
-                                cell_path,
-                                len(result),
-                                table_identity,
-                                table_geometry=geometry,
-                            )
-                        )
-                        result.extend(
-                            _images(
-                                cell,
-                                package,
-                                part,
-                                cell_path,
-                                len(result),
-                                story,
-                                object_identities,
-                            )
-                        )
-                        result.extend(
-                            _equations(
-                                cell,
-                                part,
-                                cell_path,
-                                len(result),
-                            )
-                        )
     return result
 
 
