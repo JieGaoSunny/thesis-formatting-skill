@@ -172,17 +172,6 @@ def _field_texts(element: etree._Element) -> tuple[str, ...]:
     )
 
 
-def _all_fields(context: AuditContext) -> tuple[tuple[str, str], ...]:
-    fields: list[tuple[str, str]] = []
-    for node in (
-        *context.semantic.paragraphs,
-        *context.semantic.headers,
-        *context.semantic.footers,
-    ):
-        fields.extend((node.location, field) for field in node.fields)
-    return tuple(fields)
-
-
 def _style_role_matches(context: AuditContext, role: str, style_id: str | None) -> bool:
     if style_id is None:
         return False
@@ -215,6 +204,34 @@ def _section_for_paragraph(context: AuditContext, paragraph_number: int) -> int:
         else:
             break
     return section_number
+
+
+def _first_role_section(context: AuditContext, role: str) -> int | None:
+    paragraph = next(
+        (
+            int(node.location.split(":")[1])
+            for node in context.semantic.paragraphs
+            if node.role == role
+        ),
+        None,
+    )
+    return (
+        _section_for_paragraph(context, paragraph)
+        if paragraph is not None
+        else None
+    )
+
+
+def _section_region(
+    index: int,
+    body_section: int | None,
+    appendix_section: int | None,
+) -> str:
+    if appendix_section is not None and index >= appendix_section:
+        return "appendix"
+    if body_section is not None and index >= body_section:
+        return "body"
+    return "front_matter"
 
 
 def _on(element: etree._Element | None) -> bool:
@@ -358,6 +375,13 @@ class PageRule:
 
     def audit(self, context: AuditContext) -> Iterable[AuditFinding]:
         profile = context.profile
+        body_section = _first_role_section(context, "heading_1")
+        appendix_section = _first_role_section(context, "appendix_heading")
+        start_values = {
+            "next_page": "nextPage",
+            "odd_page": "oddPage",
+            "continuous": "continuous",
+        }
         for index, section in enumerate(context.section_elements, start=1):
             location = f"section:{index}"
             size = section.find("w:pgSz", namespaces=NS)
@@ -431,15 +455,22 @@ class PageRule:
 
             section_type = section.find("w:type", namespaces=NS)
             actual_start = _attr(section_type, "val") or "nextPage"
-            if index > 1 and actual_start != "nextPage":
+            expected_start = None
+            if index > 1 and index == appendix_section:
+                expected_start = start_values[
+                    profile.page.section_start.major_back_matter
+                ]
+            elif index > 1 and index == body_section:
+                expected_start = start_values[profile.page.section_start.body]
+            if expected_start is not None and actual_start != expected_start:
                 yield AuditFinding(
                     "PAGE.SECTION.START",
                     "violation",
                     location,
-                    "Major sections must start on a new page.",
+                    "Section start does not match the selected profile.",
                     True,
                     actual_start,
-                    "nextPage",
+                    expected_start,
                 )
 
 class SemanticRule:
@@ -713,17 +744,25 @@ class FieldRule:
             re.sub(r"\s+", " ", code).strip() for _, _, code in fields
         )
         required = (
-            ("FIELD.TOC.REQUIRED", context.profile.fields.toc.field_code),
+            (
+                "FIELD.TOC.REQUIRED",
+                context.profile.fields.toc.required,
+                context.profile.fields.toc.field_code,
+            ),
             (
                 "FIELD.LIST_OF_FIGURES.REQUIRED",
+                context.profile.fields.list_of_figures.required,
                 context.profile.fields.list_of_figures.field_code,
             ),
             (
                 "FIELD.LIST_OF_TABLES.REQUIRED",
+                context.profile.fields.list_of_tables.required,
                 context.profile.fields.list_of_tables.field_code,
             ),
         )
-        for rule_id, field_code in required:
+        for rule_id, is_required, field_code in required:
+            if not is_required:
+                continue
             expected = re.sub(r"\s+", " ", field_code).strip()
             if not any(code.casefold() == expected.casefold() for code in normalized):
                 yield AuditFinding(
@@ -739,7 +778,11 @@ class FieldRule:
         bookmarks = set(context.semantic.bookmarks)
         for location, occurrence, field in fields:
             match = re.match(r"^(?:REF|PAGEREF)\s+(\S+)", field, re.IGNORECASE)
-            if match and match.group(1) not in bookmarks:
+            if (
+                context.profile.fields.cross_references.require_existing_target
+                and match
+                and match.group(1) not in bookmarks
+            ):
                 target_digest = hashlib.sha256(
                     match.group(1).encode("utf-8")
                 ).hexdigest()
@@ -793,21 +836,26 @@ class FigureRule:
                     justification,
                     context.profile.figures.alignment,
                 )
-            caption_index = index + 1
+            caption_index = (
+                index - 1
+                if context.profile.figures.caption_position == "above"
+                else index + 1
+            )
             caption = (
                 context.semantic.paragraphs[caption_index - 1]
-                if caption_index <= len(context.semantic.paragraphs)
+                if 1 <= caption_index <= len(context.semantic.paragraphs)
                 else None
             )
             if caption is None or caption.role != "figure_caption":
+                position = context.profile.figures.caption_position
                 yield AuditFinding(
                     "FIGURE.CAPTION.POSITION",
                     "violation",
                     location,
-                    "Figure must have a caption immediately below it.",
+                    f"Figure must have a caption immediately {position} it.",
                     True,
                     False,
-                    "caption below",
+                    f"caption {position}",
                 )
 
 
@@ -834,22 +882,30 @@ class TableRule:
                 continue
             table_number += 1
             location = f"table:{table_number}"
-            previous = body_children[child_index - 1] if child_index else None
-            previous_is_caption = False
-            if previous is not None and etree.QName(previous).localname == "p":
-                previous_node = semantic_by_paragraph.get(id(previous))
-                previous_is_caption = bool(
-                    previous_node and previous_node.role == "table_caption"
-                )
-            if not previous_is_caption:
+            position = context.profile.tables.caption_position
+            caption_index = (
+                child_index - 1 if position == "above" else child_index + 1
+            )
+            caption_element = (
+                body_children[caption_index]
+                if 0 <= caption_index < len(body_children)
+                else None
+            )
+            caption_node = (
+                semantic_by_paragraph.get(id(caption_element))
+                if caption_element is not None
+                and etree.QName(caption_element).localname == "p"
+                else None
+            )
+            if caption_node is None or caption_node.role != "table_caption":
                 yield AuditFinding(
                     "TABLE.CAPTION.POSITION",
                     "violation",
                     location,
-                    "Table must have a caption immediately above it.",
+                    f"Table must have a caption immediately {position} it.",
                     True,
                     False,
-                    "caption above",
+                    f"caption {position}",
                 )
 
             first_row = table.find("w:tr", namespaces=NS)
@@ -1001,42 +1057,6 @@ class HeaderFooterRule:
     rule_id = "HEADER.FOOTER"
 
     def audit(self, context: AuditContext) -> Iterable[AuditFinding]:
-        page_fields = [
-            (location, field)
-            for location, field in _all_fields(context)
-            if re.match(r"^PAGE(?:\s|$)", field, re.IGNORECASE)
-        ]
-        if not page_fields:
-            yield AuditFinding(
-                "HEADER.FOOTER.PAGE_NUMBER",
-                "violation",
-                "document",
-                "No generated page-number field was found.",
-                True,
-                False,
-                True,
-            )
-        if not context.semantic.headers:
-            yield AuditFinding(
-                "HEADER.FOOTER.HEADER_REQUIRED",
-                "violation",
-                "document",
-                "No generated thesis header was found.",
-                True,
-                False,
-                True,
-            )
-        if not context.semantic.footers:
-            yield AuditFinding(
-                "HEADER.FOOTER.FOOTER_REQUIRED",
-                "violation",
-                "document",
-                "No thesis footer was found.",
-                True,
-                False,
-                True,
-            )
-
         body_paragraph = next(
             (
                 int(node.location.split(":")[1])
@@ -1045,47 +1065,37 @@ class HeaderFooterRule:
             ),
             None,
         )
-        body_section = (
-            _section_for_paragraph(context, body_paragraph)
-            if body_paragraph is not None
-            else None
-        )
-        appendix_paragraph = next(
-            (
-                int(node.location.split(":")[1])
-                for node in context.semantic.paragraphs
-                if node.role == "appendix_heading"
-            ),
-            None,
-        )
-        appendix_section = (
-            _section_for_paragraph(context, appendix_paragraph)
-            if appendix_paragraph is not None
-            else None
-        )
+        body_section = _first_role_section(context, "heading_1")
+        appendix_section = _first_role_section(context, "appendix_heading")
         front_section = _first_numbered_front_section(context, body_paragraph)
         header_targets = _effective_story_targets(context, "header")
         footer_targets = _effective_story_targets(context, "footer")
         for index, section in enumerate(context.section_elements, start=1):
             location = f"section:{index}"
-            region = (
-                "appendix"
-                if appendix_section is not None and index >= appendix_section
-                else "body"
-                if body_section is not None and index >= body_section
-                else "front_matter"
+            region = _section_region(index, body_section, appendix_section)
+            region_profile = getattr(context.profile.headers_footers, region)
+            front_part = (
+                _front_part_for_section(context, index, body_paragraph)
+                if region == "front_matter"
+                else None
+            )
+            header_enabled = region_profile.header_enabled and (
+                front_part is None or front_part.show_header
+            )
+            page_number_enabled = region_profile.page_number_enabled and (
+                front_part is None or front_part.page_number_style != "none"
             )
             linking = context.profile.headers_footers.section_linking
             link_headers = {
                 "front_matter": False,
                 "body": linking.link_body_headers,
                 "appendix": linking.link_appendix_headers,
-            }[region]
+            }[region] and header_enabled
             link_footers = {
                 "front_matter": False,
                 "body": linking.link_body_footers,
                 "appendix": linking.link_appendix_footers,
-            }[region]
+            }[region] and page_number_enabled
             broken_links: list[str] = []
             if (
                 index > 1
@@ -1110,6 +1120,100 @@ class HeaderFooterRule:
                     "linked to previous",
                 )
 
+            header_target = header_targets[index - 1]
+            header_paragraphs = tuple(
+                node
+                for node in context.semantic.headers
+                if node.part_name == header_target
+            )
+            if header_enabled and not header_paragraphs:
+                yield AuditFinding(
+                    "HEADER.FOOTER.HEADER_REQUIRED",
+                    "violation",
+                    location,
+                    "No generated thesis header was found for this section.",
+                    True,
+                    False,
+                    True,
+                )
+            elif header_enabled:
+                source = region_profile.header_source
+                dynamic_roles = {
+                    "current_front_heading": "front_heading",
+                    "current_heading_1": "heading_1",
+                    "current_appendix": "appendix_heading",
+                    "current_appendix_heading": "appendix_heading",
+                }
+                source_matches = True
+                if source in dynamic_roles:
+                    expected_styles = {
+                        name.casefold()
+                        for name in context.profile.styles[
+                            dynamic_roles[source]
+                        ].word_styles
+                    }
+                    source_matches = any(
+                        _styleref_targets(field, expected_styles)
+                        for node in header_paragraphs
+                        for field in node.fields
+                    )
+                elif source in {"fixed", "fixed_text"}:
+                    expected_text = re.sub(
+                        r"\s+", " ", region_profile.header_text or ""
+                    ).strip()
+                    source_matches = any(
+                        re.sub(r"\s+", " ", node.raw_text).strip()
+                        == expected_text
+                        for node in header_paragraphs
+                    )
+                elif source == "none":
+                    source_matches = False
+                if not source_matches:
+                    yield AuditFinding(
+                        "HEADER.FOOTER.HEADER_SOURCE",
+                        "violation",
+                        location,
+                        "Header content does not match the configured source.",
+                        True,
+                        "missing or unrelated header source",
+                        source,
+                    )
+
+            footer_target = footer_targets[index - 1]
+            footer_paragraphs = tuple(
+                node
+                for node in context.semantic.footers
+                if node.part_name == footer_target
+            )
+            page_paragraphs = tuple(
+                node
+                for node in footer_paragraphs
+                if any(
+                    re.match(r"^PAGE(?:\s|$)", field, re.IGNORECASE)
+                    for field in node.fields
+                )
+            )
+            if page_number_enabled and not footer_paragraphs:
+                yield AuditFinding(
+                    "HEADER.FOOTER.FOOTER_REQUIRED",
+                    "violation",
+                    location,
+                    "No thesis footer was found for this section.",
+                    True,
+                    False,
+                    True,
+                )
+            if page_number_enabled and not page_paragraphs:
+                yield AuditFinding(
+                    "HEADER.FOOTER.PAGE_NUMBER",
+                    "violation",
+                    location,
+                    "No generated page-number field was found for this section.",
+                    True,
+                    False,
+                    True,
+                )
+
             page_number = section.find("w:pgNumType", namespaces=NS)
             if body_section is not None and index == body_section:
                 expected_start = context.profile.fields.page_number.body_start
@@ -1118,16 +1222,19 @@ class HeaderFooterRule:
             else:
                 expected_start = None
             actual_start = _attr(page_number, "start")
-            if (
-                expected_start is not None
-                and actual_start != str(expected_start)
-            ) or (
-                expected_start is None
-                and (
-                    (front_section is None or index < front_section)
-                    and (body_section is None or index < body_section)
+            if page_number_enabled and (
+                (
+                    expected_start is not None
+                    and actual_start != str(expected_start)
                 )
-                and actual_start is not None
+                or (
+                    expected_start is None
+                    and (
+                        (front_section is None or index < front_section)
+                        and (body_section is None or index < body_section)
+                    )
+                    and actual_start is not None
+                )
             ):
                 yield AuditFinding(
                     "HEADER.FOOTER.PAGE_RESET",
@@ -1138,14 +1245,18 @@ class HeaderFooterRule:
                     actual_start,
                     expected_start,
                 )
-            if body_section is not None and index >= body_section:
-                expected_format = "decimal"
-            elif front_section is not None and index >= front_section:
-                expected_format = "upperRoman"
-            else:
-                expected_format = None
+            page_number_style = (
+                front_part.page_number_style
+                if front_part is not None
+                else region_profile.page_number_style
+            )
+            expected_format = {
+                "none": None,
+                "upper_roman": "upperRoman",
+                "decimal": "decimal",
+            }[page_number_style]
             actual_format = _attr(page_number, "fmt")
-            if actual_format != expected_format:
+            if page_number_enabled and actual_format != expected_format:
                 yield AuditFinding(
                     "HEADER.FOOTER.PAGE_STYLE",
                     "violation",
@@ -1156,42 +1267,21 @@ class HeaderFooterRule:
                     expected_format,
                 )
 
-            region_profile = getattr(context.profile.headers_footers, region)
-            if (
-                region_profile.header_enabled
-                and region_profile.header_source
-                in {"current_heading_1", "current_appendix_heading"}
-            ):
-                target = header_targets[index - 1]
-                paragraphs = tuple(
-                    node
-                    for node in context.semantic.headers
-                    if node.part_name == target
+            if page_number_enabled and page_paragraphs:
+                expected_alignment = region_profile.page_number_alignment
+                actual_alignments = tuple(
+                    _story_paragraph_alignment(context, node)
+                    for node in page_paragraphs
                 )
-                expected_role = (
-                    "heading_1"
-                    if region_profile.header_source == "current_heading_1"
-                    else "appendix_heading"
-                )
-                expected_styles = {
-                    name.casefold()
-                    for name in context.profile.styles[
-                        expected_role
-                    ].word_styles
-                }
-                if not any(
-                    _styleref_targets(field, expected_styles)
-                    for node in paragraphs
-                    for field in node.fields
-                ):
+                if expected_alignment not in actual_alignments:
                     yield AuditFinding(
-                        "HEADER.FOOTER.HEADER_SOURCE",
+                        "HEADER.FOOTER.PAGE_ALIGNMENT",
                         "violation",
                         location,
-                        "Dynamic header source must use the configured STYLEREF field.",
+                        "Page-number alignment does not match the profile.",
                         True,
-                        "static or unrelated header",
-                        region_profile.header_source,
+                        list(actual_alignments),
+                        expected_alignment,
                     )
 
 
@@ -1213,6 +1303,39 @@ def _first_numbered_front_section(
         ):
             return _section_for_paragraph(context, paragraph_number)
     return None
+
+
+def _front_part_for_section(
+    context: AuditContext,
+    section_number: int,
+    body_paragraph: int | None,
+):
+    nodes = tuple(
+        node
+        for node in context.semantic.paragraphs
+        if (
+            body_paragraph is None
+            or int(node.location.split(":")[1]) < body_paragraph
+        )
+        and _section_for_paragraph(
+            context, int(node.location.split(":")[1])
+        )
+        == section_number
+    )
+    return next(
+        (
+            part
+            for part in context.profile.front_matter.parts
+            if any(
+                node.role == part.heading_role
+                or _style_role_matches(
+                    context, part.heading_role, node.style_id
+                )
+                for node in nodes
+            )
+        ),
+        None,
+    )
 
 
 def _effective_story_targets(
@@ -1246,6 +1369,14 @@ def _effective_story_targets(
             current = relationship_by_id.get(relationship_id)
         targets.append(current)
     return tuple(targets)
+
+
+def _story_paragraph_alignment(context: AuditContext, node) -> str:
+    paragraph_number = int(node.location.rsplit(":", 1)[1])
+    root = context.package.xml(node.part_name)
+    paragraphs = root.xpath(".//w:p", namespaces=NS)
+    paragraph = paragraphs[paragraph_number - 1]
+    return _attr(paragraph.find("w:pPr/w:jc", namespaces=NS), "val") or "left"
 
 
 def _styleref_targets(field: str, expected_styles: set[str]) -> bool:

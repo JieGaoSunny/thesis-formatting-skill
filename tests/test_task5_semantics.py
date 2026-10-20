@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from zipfile import ZipFile
@@ -54,6 +55,53 @@ def _xml(path: Path, name: str) -> etree._Element:
 def _rule_ids(path: Path) -> list[str]:
     report = audit_document(path, PROFILE, clock=lambda: NOW)
     return [finding["rule_id"] for finding in report["findings"]]
+
+
+def _rule_ids_for_profile(path: Path, profile) -> list[str]:
+    report = audit_document(path, profile, clock=lambda: NOW)
+    return [finding["rule_id"] for finding in report["findings"]]
+
+
+def _set_story_paragraph(
+    path: Path, part_name: str, *, text: str = "", field: str | None = None
+) -> None:
+    root = _xml(path, part_name)
+    paragraph = root.find(".//w:p", namespaces=NS)
+    assert paragraph is not None
+    for child in list(paragraph):
+        paragraph.remove(child)
+    if text:
+        run = etree.SubElement(paragraph, f"{W}r")
+        etree.SubElement(run, f"{W}t").text = text
+    if field:
+        simple = etree.SubElement(paragraph, f"{W}fldSimple")
+        simple.set(f"{W}instr", field)
+    _replace_part(path, part_name, root)
+
+
+def _set_story_alignment(path: Path, part_name: str, alignment: str) -> None:
+    root = _xml(path, part_name)
+    paragraph = root.find(".//w:p", namespaces=NS)
+    assert paragraph is not None
+    p_pr = paragraph.find("w:pPr", namespaces=NS)
+    if p_pr is None:
+        p_pr = etree.Element(f"{W}pPr")
+        paragraph.insert(0, p_pr)
+    justification = p_pr.find("w:jc", namespaces=NS)
+    if justification is None:
+        justification = etree.SubElement(p_pr, f"{W}jc")
+    justification.set(f"{W}val", alignment)
+    _replace_part(path, part_name, root)
+
+
+def _set_section_type(path: Path, section: int, value: str) -> None:
+    root = _xml(path, "word/document.xml")
+    sections = root.xpath(".//w:sectPr", namespaces=NS)
+    section_type = sections[section - 1].find("w:type", namespaces=NS)
+    if section_type is None:
+        section_type = etree.SubElement(sections[section - 1], f"{W}type")
+    section_type.set(f"{W}val", value)
+    _replace_part(path, "word/document.xml", root)
 
 
 def _set_num_format(path: Path, num_id: str, value: str) -> None:
@@ -463,8 +511,12 @@ def test_header_linking_uses_targets_and_dynamic_sources_require_styleref(
     assert paragraph is not None
     for child in list(paragraph):
         paragraph.remove(child)
-    field = etree.SubElement(paragraph, f"{W}fldSimple")
-    field.set(f"{W}instr", " STYLEREF AppleHeading1 ")
+    for instruction in (
+        " STYLEREF AppleFrontHeading ",
+        " STYLEREF AppleHeading1 ",
+    ):
+        field = etree.SubElement(paragraph, f"{W}fldSimple")
+        field.set(f"{W}instr", instruction)
     _replace_part(path, "word/header1.xml", header)
     assert "HEADER.FOOTER.HEADER_SOURCE" not in _rule_ids(path)
 
@@ -564,6 +616,304 @@ def test_front_and_body_page_resets_follow_semantic_region_starts(
 
     _set_section_page_number(path, 2, start=2, fmt="upperRoman")
     assert "HEADER.FOOTER.PAGE_RESET" in _rule_ids(path)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "rule_id"),
+    [
+        ("toc", "FIELD.TOC.REQUIRED"),
+        ("list_of_figures", "FIELD.LIST_OF_FIGURES.REQUIRED"),
+        ("list_of_tables", "FIELD.LIST_OF_TABLES.REQUIRED"),
+    ],
+)
+def test_generated_field_findings_honor_required_boolean(
+    tmp_path: Path,
+    field_name: str,
+    rule_id: str,
+) -> None:
+    path = build_docx(tmp_path / f"{field_name}.docx", [{"text": "正文"}])
+    field_profile = getattr(PROFILE.fields, field_name)
+    fields = replace(
+        PROFILE.fields,
+        **{field_name: replace(field_profile, required=False)},
+    )
+    profile = replace(PROFILE, fields=fields)
+
+    assert rule_id not in _rule_ids_for_profile(path, profile)
+
+
+def test_cross_reference_target_finding_honors_profile_boolean(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "cross-reference.docx",
+        [{"text": "Reference", "field": "REF missing_target"}],
+    )
+    fields = replace(
+        PROFILE.fields,
+        cross_references=replace(
+            PROFILE.fields.cross_references,
+            require_existing_target=False,
+        ),
+    )
+    profile = replace(PROFILE, fields=fields)
+
+    assert (
+        "FIELD.CROSS_REFERENCE.TARGET"
+        not in _rule_ids_for_profile(path, profile)
+    )
+
+
+@pytest.mark.parametrize(
+    ("region", "paragraphs", "profile_value", "ooxml_value"),
+    [
+        (
+            "body",
+            [
+                {"text": "封面", "style": "AppleTitleZH", "section_break": True},
+                {"text": "第一章 正文", "style": "AppleHeading1"},
+            ],
+            "odd_page",
+            "oddPage",
+        ),
+        (
+            "major_back_matter",
+            [
+                {"text": "第一章 正文", "style": "AppleHeading1", "section_break": True},
+                {"text": "附录 A", "style": "AppleAppendixHeading"},
+            ],
+            "continuous",
+            "continuous",
+        ),
+    ],
+)
+def test_section_start_uses_profile_region_setting(
+    tmp_path: Path,
+    region: str,
+    paragraphs: list[dict[str, object]],
+    profile_value: str,
+    ooxml_value: str,
+) -> None:
+    path = build_docx(tmp_path / f"{region}.docx", paragraphs)
+    _set_section_type(path, 2, ooxml_value)
+    section_start = replace(
+        PROFILE.page.section_start,
+        **{region: profile_value},
+    )
+    profile = replace(
+        PROFILE,
+        page=replace(PROFILE.page, section_start=section_start),
+    )
+
+    assert "PAGE.SECTION.START" not in _rule_ids_for_profile(path, profile)
+
+
+@pytest.mark.parametrize(
+    ("kind", "caption_position"),
+    [
+        ("figure", "above"),
+        ("table", "below"),
+    ],
+)
+def test_caption_position_uses_profile_setting(
+    tmp_path: Path,
+    kind: str,
+    caption_position: str,
+) -> None:
+    if kind == "figure":
+        path = build_docx(
+            tmp_path / "figure-above.docx",
+            [
+                {"text": "图题", "style": "AppleFigureCaption"},
+                {"text": "figure"},
+            ],
+        )
+        _add_drawing(path, 2)
+        profile = replace(
+            PROFILE,
+            figures=replace(PROFILE.figures, caption_position=caption_position),
+        )
+        rule_id = "FIGURE.CAPTION.POSITION"
+    else:
+        path = build_docx(
+            tmp_path / "table-below.docx",
+            [{"text": "表题", "style": "AppleTableCaption"}],
+            add_table=True,
+        )
+        root = _xml(path, "word/document.xml")
+        body = root.find("w:body", namespaces=NS)
+        assert body is not None
+        table = body.find("w:tbl", namespaces=NS)
+        caption = body.find("w:p", namespaces=NS)
+        assert table is not None and caption is not None
+        body.remove(caption)
+        body.insert(body.index(table) + 1, caption)
+        _replace_part(path, "word/document.xml", root)
+        profile = replace(
+            PROFILE,
+            tables=replace(PROFILE.tables, caption_position=caption_position),
+        )
+        rule_id = "TABLE.CAPTION.POSITION"
+
+    assert rule_id not in _rule_ids_for_profile(path, profile)
+
+
+@pytest.mark.parametrize("setting", ["header", "page_number"])
+def test_header_and_page_number_findings_honor_enabled_settings(
+    tmp_path: Path,
+    setting: str,
+) -> None:
+    path = build_docx(
+        tmp_path / f"{setting}-disabled.docx",
+        [{"text": "第一章 正文", "style": "AppleHeading1"}],
+    )
+    body = PROFILE.headers_footers.body
+    if setting == "header":
+        body = replace(body, header_enabled=False, header_source="none")
+        forbidden = {
+            "HEADER.FOOTER.HEADER_REQUIRED",
+            "HEADER.FOOTER.HEADER_SOURCE",
+        }
+    else:
+        body = replace(
+            body,
+            page_number_enabled=False,
+            page_number_style="none",
+        )
+        forbidden = {
+            "HEADER.FOOTER.PAGE_NUMBER",
+            "HEADER.FOOTER.FOOTER_REQUIRED",
+            "HEADER.FOOTER.PAGE_RESET",
+            "HEADER.FOOTER.PAGE_STYLE",
+            "HEADER.FOOTER.PAGE_ALIGNMENT",
+        }
+    profile = replace(
+        PROFILE,
+        headers_footers=replace(PROFILE.headers_footers, body=body),
+    )
+
+    assert forbidden.isdisjoint(_rule_ids_for_profile(path, profile))
+
+
+@pytest.mark.parametrize(
+    ("region", "paragraphs", "source", "field", "text"),
+    [
+        (
+            "front_matter",
+            [{"text": "目录", "style": "AppleFrontHeading"}],
+            "current_front_heading",
+            "STYLEREF AppleFrontHeading",
+            "",
+        ),
+        (
+            "body",
+            [{"text": "第一章 正文", "style": "AppleHeading1"}],
+            "current_heading_1",
+            "STYLEREF AppleHeading1",
+            "",
+        ),
+        (
+            "appendix",
+            [{"text": "附录 A", "style": "AppleAppendixHeading"}],
+            "current_appendix_heading",
+            "STYLEREF AppleAppendixHeading",
+            "",
+        ),
+        (
+            "body",
+            [{"text": "第一章 正文", "style": "AppleHeading1"}],
+            "fixed_text",
+            None,
+            "Apple University",
+        ),
+        (
+            "body",
+            [{"text": "第一章 正文", "style": "AppleHeading1"}],
+            "none",
+            None,
+            "",
+        ),
+    ],
+)
+def test_header_source_variants_are_profile_driven(
+    tmp_path: Path,
+    region: str,
+    paragraphs: list[dict[str, object]],
+    source: str,
+    field: str | None,
+    text: str,
+) -> None:
+    path = build_docx(
+        tmp_path / f"{source}.docx",
+        paragraphs,
+        add_header_footer=source != "none",
+    )
+    region_profile = getattr(PROFILE.headers_footers, region)
+    region_profile = replace(
+        region_profile,
+        header_enabled=source != "none",
+        header_source=source,
+        header_text=text or None,
+    )
+    profile = replace(
+        PROFILE,
+        headers_footers=replace(
+            PROFILE.headers_footers,
+            **{region: region_profile},
+        ),
+    )
+
+    if source != "none":
+        assert (
+            "HEADER.FOOTER.HEADER_SOURCE"
+            in _rule_ids_for_profile(path, profile)
+        )
+        _set_story_paragraph(path, "word/header1.xml", text=text, field=field)
+    assert (
+        "HEADER.FOOTER.HEADER_SOURCE"
+        not in _rule_ids_for_profile(path, profile)
+    )
+
+
+@pytest.mark.parametrize("alignment", ["left", "center", "right"])
+def test_page_number_alignment_uses_profile_setting(
+    tmp_path: Path,
+    alignment: str,
+) -> None:
+    path = build_docx(
+        tmp_path / f"page-{alignment}.docx",
+        [{"text": "第一章 正文", "style": "AppleHeading1"}],
+        add_header_footer=True,
+    )
+    _set_story_alignment(path, "word/footer1.xml", alignment)
+    body = replace(
+        PROFILE.headers_footers.body,
+        page_number_alignment=alignment,
+    )
+    fields = replace(
+        PROFILE.fields,
+        page_number=replace(PROFILE.fields.page_number, alignment=alignment),
+    )
+    profile = replace(
+        PROFILE,
+        fields=fields,
+        headers_footers=replace(PROFILE.headers_footers, body=body),
+    )
+
+    _set_story_alignment(
+        path,
+        "word/footer1.xml",
+        {"left": "right", "center": "left", "right": "center"}[alignment],
+    )
+    assert (
+        "HEADER.FOOTER.PAGE_ALIGNMENT"
+        in _rule_ids_for_profile(path, profile)
+    )
+    _set_story_alignment(path, "word/footer1.xml", alignment)
+    assert (
+        "HEADER.FOOTER.PAGE_ALIGNMENT"
+        not in _rule_ids_for_profile(path, profile)
+    )
 
 
 def test_markdown_escapes_pipes_backslashes_and_newlines() -> None:
