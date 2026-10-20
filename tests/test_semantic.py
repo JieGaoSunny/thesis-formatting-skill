@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
+from types import MappingProxyType
 from zipfile import ZipFile
 
 import pytest
 
-from thesis_format.ooxml import OoxmlError, OoxmlPackage
-from thesis_format.profile import load_profile
+from thesis_format.ooxml import OoxmlError, OoxmlPackage, parse_xml
+from thesis_format.profile import RoleDetection, TextPattern, load_profile
 from thesis_format.semantic import inspect_document
 
 from helpers.docx_factory import build_docx, build_minimal_roles_fixture
@@ -25,6 +26,19 @@ def minimal_fixture() -> None:
 
 def find_text(document, text: str):
     return next(node for node in document.paragraphs if node.raw_text == text)
+
+
+def replace_zip_part(path: Path, part_name: str, replacement: bytes) -> None:
+    rewritten = path.with_suffix(".rewrite.docx")
+    with ZipFile(path) as source, ZipFile(rewritten, "w") as target:
+        for info in source.infolist():
+            target.writestr(
+                info,
+                replacement
+                if info.filename == part_name
+                else source.read(info.filename),
+            )
+    rewritten.replace(path)
 
 
 def test_semantic_document_and_nodes_are_immutable_and_one_based() -> None:
@@ -74,6 +88,61 @@ def test_explicit_fields_bookmarks_and_numbering_are_enumerated(
     assert heading.role_source == "explicit_structure"
 
 
+def test_multiple_complex_fields_are_enumerated_separately_in_order(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "multiple-fields.docx",
+        [
+            {
+                "text": "Two captions",
+                "fields": [
+                    " SEQ Figure \\* ARABIC ",
+                    " SEQ Table \\* ARABIC ",
+                ],
+            }
+        ],
+    )
+    node = inspect_document(path, PROFILE).paragraphs[0]
+    assert node.fields == (
+        "SEQ Figure \\* ARABIC",
+        "SEQ Table \\* ARABIC",
+    )
+
+
+def test_conflicting_fields_are_preserved_as_conflict(tmp_path: Path) -> None:
+    path = build_docx(
+        tmp_path / "field-conflict.docx",
+        [
+            {
+                "text": "Conflicting fields",
+                "fields": ["SEQ Figure", "SEQ Table"],
+            }
+        ],
+    )
+    node = inspect_document(path, PROFILE).paragraphs[0]
+    assert node.role is None
+    assert node.warning == "ROLE.CONFLICT"
+
+
+def test_conflicting_bookmarks_are_preserved_as_conflict(tmp_path: Path) -> None:
+    path = build_docx(
+        tmp_path / "bookmark-conflict.docx",
+        [
+            {
+                "text": "Conflicting bookmarks",
+                "bookmarks": [
+                    "thesis-role-figure_caption",
+                    "thesis-role-table_caption",
+                ],
+            }
+        ],
+    )
+    node = inspect_document(path, PROFILE).paragraphs[0]
+    assert node.role is None
+    assert node.warning == "ROLE.CONFLICT"
+
+
 def test_text_patterns_use_fullmatch(tmp_path: Path) -> None:
     path = build_docx(
         tmp_path / "patterns.docx",
@@ -86,6 +155,53 @@ def test_text_patterns_use_fullmatch(tmp_path: Path) -> None:
     assert (matched.role, matched.role_source) == ("heading_1", "text_pattern")
     assert embedded.role is None
     assert embedded.warning == "ROLE.AMBIGUOUS"
+
+
+def test_text_pattern_highest_priority_wins(tmp_path: Path) -> None:
+    path = build_docx(tmp_path / "priority.docx", [{"text": "Overlap"}])
+    profile = replace(
+        PROFILE,
+        role_detection=RoleDetection(
+            text_patterns=MappingProxyType(
+                {
+                    "figure_caption": (
+                        TextPattern("^Overlap$", ("unicode",), 10),
+                    ),
+                    "table_caption": (
+                        TextPattern("^Overlap$", ("unicode",), 20),
+                    ),
+                }
+            ),
+            position_constraints=MappingProxyType({}),
+        ),
+    )
+    node = inspect_document(path, profile).paragraphs[0]
+    assert (node.role, node.role_source) == ("table_caption", "text_pattern")
+
+
+def test_text_pattern_priority_tie_between_roles_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(tmp_path / "priority-tie.docx", [{"text": "Overlap"}])
+    profile = replace(
+        PROFILE,
+        role_detection=RoleDetection(
+            text_patterns=MappingProxyType(
+                {
+                    "figure_caption": (
+                        TextPattern("^Overlap$", ("unicode",), 20),
+                    ),
+                    "table_caption": (
+                        TextPattern("^Overlap$", ("unicode",), 20),
+                    ),
+                }
+            ),
+            position_constraints=MappingProxyType({}),
+        ),
+    )
+    node = inspect_document(path, profile).paragraphs[0]
+    assert node.role is None
+    assert node.warning == "ROLE.AMBIGUOUS"
 
 
 def test_document_position_only_recognizes_reference_entries(
@@ -147,12 +263,48 @@ def test_enumerates_tables_sections_headers_footers_relationships() -> None:
     assert all(relationship.identity for relationship in document.relationships)
 
 
+def test_section_start_paragraph_tracks_paragraph_and_final_sectpr(
+    tmp_path: Path,
+) -> None:
+    path = build_docx(
+        tmp_path / "sections.docx",
+        [
+            {"text": "Section one, paragraph one"},
+            {"text": "Section one, paragraph two", "section_break": True},
+            {"text": "Section two, paragraph one"},
+            {"text": "Section two, paragraph two"},
+        ],
+    )
+    sections = inspect_document(path, PROFILE).sections
+    assert [section.start_paragraph for section in sections] == [1, 4]
+
+
 def test_ooxml_roundtrip_preserves_unsupported_parts(tmp_path: Path) -> None:
     output = tmp_path / "roundtrip.docx"
     package = OoxmlPackage.open(FIXTURE)
     package.write(output)
     with ZipFile(output) as archive:
         assert archive.read("customXml/unsupported.bin") == b"\x00opaque\xff"
+
+
+@pytest.mark.parametrize("declaration", [b"<!DOCTYPE root>", b"<!ENTITY x 'y'>"])
+def test_unsafe_xml_declaration_after_long_prefix_is_rejected(
+    declaration: bytes,
+) -> None:
+    data = b" " * 5000 + declaration + b"<root/>"
+    with pytest.raises(OoxmlError, match="unsafe XML declaration"):
+        parse_xml(data, part_name="word/document.xml")
+
+
+def test_relationship_comments_are_ignored(tmp_path: Path) -> None:
+    path = build_docx(tmp_path / "relationship-comment.docx", [{"text": "Text"}])
+    with ZipFile(path) as archive:
+        relationships = archive.read("_rels/.rels")
+    relationships = relationships.replace(
+        b">", b"><!-- legal package relationship comment -->", 1
+    )
+    replace_zip_part(path, "_rels/.rels", relationships)
+    assert OoxmlPackage.open(path).relationships()
 
 
 @pytest.mark.parametrize("kind", ["not_zip", "missing_part", "corrupt_xml"])

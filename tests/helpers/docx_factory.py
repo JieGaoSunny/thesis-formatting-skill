@@ -96,12 +96,18 @@ def build_docx(
             if str(style) not in document.styles:
                 document.styles.add_style(str(style), WD_STYLE_TYPE.PARAGRAPH)
             paragraph.style = str(style)
-        field = item.get("field")
-        if field:
+        fields = item.get("fields")
+        if fields is None:
+            field = item.get("field")
+            fields = [field] if field else []
+        for field in fields:
             _append_field(paragraph, str(field))
-        bookmark = item.get("bookmark")
-        if bookmark:
-            _append_bookmark(paragraph, str(bookmark), index)
+        bookmarks = item.get("bookmarks")
+        if bookmarks is None:
+            bookmark = item.get("bookmark")
+            bookmarks = [bookmark] if bookmark else []
+        for bookmark_offset, bookmark in enumerate(bookmarks):
+            _append_bookmark(paragraph, str(bookmark), index * 100 + bookmark_offset)
         numbering_level = item.get("numbering_level")
         if numbering_level is not None:
             _set_numbering(paragraph, int(numbering_level))

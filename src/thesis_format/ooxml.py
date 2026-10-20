@@ -68,7 +68,7 @@ def secure_xml_parser() -> etree.XMLParser:
 def parse_xml(data: bytes, *, part_name: str = "<memory>") -> etree._Element:
     """Parse one XML part using the hardened parser."""
 
-    upper = data[:4096].upper()
+    upper = data.upper()
     if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
         raise OoxmlError(f"unsafe XML declaration in part {part_name!r}")
     try:
@@ -215,17 +215,55 @@ class OoxmlPackage:
             if not name.endswith(".rels"):
                 continue
             root = self.xml(name)
+            try:
+                root_name = etree.QName(root)
+            except ValueError as error:
+                raise OoxmlError(
+                    f"invalid relationships root in part {name!r}"
+                ) from error
+            if (
+                root_name.namespace != REL_NS
+                or root_name.localname != "Relationships"
+            ):
+                raise OoxmlError(
+                    f"invalid relationships root in part {name!r}"
+                )
             source = _relationship_source(name)
             for element in root:
-                if etree.QName(element).localname != "Relationship":
+                if not isinstance(element.tag, str):
                     continue
+                try:
+                    element_name = etree.QName(element)
+                except ValueError as error:
+                    raise OoxmlError(
+                        f"invalid relationship element in part {name!r}"
+                    ) from error
+                if (
+                    element_name.namespace != REL_NS
+                    or element_name.localname != "Relationship"
+                ):
+                    raise OoxmlError(
+                        f"invalid relationship element in part {name!r}"
+                    )
+                relationship_id = element.get("Id")
+                relationship_type = element.get("Type")
+                target = element.get("Target")
+                target_mode = element.get("TargetMode")
+                if not relationship_id or not relationship_type or not target:
+                    raise OoxmlError(
+                        f"incomplete relationship in part {name!r}"
+                    )
+                if target_mode not in {None, "Internal", "External"}:
+                    raise OoxmlError(
+                        f"invalid relationship target mode in part {name!r}"
+                    )
                 relationships.append(
                     Relationship(
                         source_part=source,
-                        id=element.get("Id", ""),
-                        type=element.get("Type", ""),
-                        target=element.get("Target", ""),
-                        target_mode=element.get("TargetMode"),
+                        id=relationship_id,
+                        type=relationship_type,
+                        target=target,
+                        target_mode=target_mode,
                     )
                 )
         return tuple(relationships)

@@ -18,6 +18,10 @@ R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 NS = {"w": W_NS, "r": R_NS}
 W_VAL = f"{{{W_NS}}}val"
 W_INSTR = f"{{{W_NS}}}instr"
+W_FLD_CHAR_TYPE = f"{{{W_NS}}}fldCharType"
+W_FLD_CHAR = f"{{{W_NS}}}fldChar"
+W_FLD_SIMPLE = f"{{{W_NS}}}fldSimple"
+W_INSTR_TEXT = f"{{{W_NS}}}instrText"
 R_ATTRIBUTES = {
     f"{{{R_NS}}}id",
     f"{{{R_NS}}}embed",
@@ -121,15 +125,45 @@ def _text(element: etree._Element) -> str:
 
 def _fields(element: etree._Element) -> tuple[str, ...]:
     values: list[str] = []
-    for simple in element.xpath(".//w:fldSimple", namespaces=NS):
-        instruction = simple.get(W_INSTR)
-        if instruction:
-            values.append(FIELD_SPACE.sub(" ", instruction).strip())
-    complex_instruction = "".join(
-        element.xpath(".//w:instrText/text()", namespaces=NS)
-    )
-    if complex_instruction.strip():
-        values.append(FIELD_SPACE.sub(" ", complex_instruction).strip())
+    complex_fields: list[dict[str, object]] = []
+
+    def append_instruction(instruction: str) -> None:
+        normalized = FIELD_SPACE.sub(" ", instruction).strip()
+        if normalized:
+            values.append(normalized)
+
+    for descendant in element.iter():
+        if descendant.tag == W_FLD_SIMPLE:
+            instruction = descendant.get(W_INSTR)
+            if instruction:
+                append_instruction(instruction)
+        elif descendant.tag == W_FLD_CHAR:
+            field_type = descendant.get(W_FLD_CHAR_TYPE)
+            if field_type == "begin":
+                complex_fields.append(
+                    {"parts": [], "collecting": True, "emitted": False}
+                )
+            elif field_type == "separate" and complex_fields:
+                current = complex_fields[-1]
+                if not current["emitted"]:
+                    append_instruction("".join(current["parts"]))
+                    current["emitted"] = True
+                current["collecting"] = False
+            elif field_type == "end" and complex_fields:
+                current = complex_fields.pop()
+                if not current["emitted"]:
+                    append_instruction("".join(current["parts"]))
+        elif (
+            descendant.tag == W_INSTR_TEXT
+            and complex_fields
+            and complex_fields[-1]["collecting"]
+            and descendant.text
+        ):
+            complex_fields[-1]["parts"].append(descendant.text)
+
+    for current in complex_fields:
+        if not current["emitted"]:
+            append_instruction("".join(current["parts"]))
     return tuple(values)
 
 
@@ -204,18 +238,17 @@ def _mapped_style_role(
     return None
 
 
-def _bookmark_role(bookmarks: tuple[str, ...]) -> str | None:
+def _bookmark_roles(bookmarks: tuple[str, ...]) -> set[str]:
     normalized = {
         bookmark.removeprefix("thesis-role-")
         .removeprefix("role_")
         .removeprefix("role:")
         for bookmark in bookmarks
     }
-    matches = normalized & AUTOMATIC_ROLES
-    return next(iter(matches)) if len(matches) == 1 else None
+    return normalized & AUTOMATIC_ROLES
 
 
-def _field_role(fields: tuple[str, ...]) -> str | None:
+def _field_roles(fields: tuple[str, ...]) -> set[str]:
     roles: set[str] = set()
     for field in fields:
         upper = field.upper()
@@ -223,7 +256,7 @@ def _field_role(fields: tuple[str, ...]) -> str | None:
             roles.add("figure_caption")
         if re.search(r"\bSEQ\s+(TABLE|表)\b", upper):
             roles.add("table_caption")
-    return next(iter(roles)) if len(roles) == 1 else None
+    return roles
 
 
 def _numbering_role(element: etree._Element) -> str | None:
@@ -243,28 +276,29 @@ def _explicit_role(
     fields: tuple[str, ...],
     bookmarks: tuple[str, ...],
 ) -> tuple[str | None, bool]:
-    candidates = {
-        role
-        for role in (
-            _field_role(fields),
-            _bookmark_role(bookmarks),
-            _numbering_role(element),
-        )
-        if role is not None
-    }
+    candidates = _field_roles(fields) | _bookmark_roles(bookmarks)
+    numbering_role = _numbering_role(element)
+    if numbering_role is not None:
+        candidates.add(numbering_role)
     if len(candidates) > 1:
         return None, True
     return (next(iter(candidates)), False) if candidates else (None, False)
 
 
 def _pattern_roles(text: str, profile: FormatProfile) -> set[str]:
-    matches: set[str] = set()
+    matches: list[tuple[int, str]] = []
     for role, patterns in profile.role_detection.text_patterns.items():
         if role not in AUTOMATIC_ROLES:
             continue
-        if any(_compile_pattern(pattern).fullmatch(text) for pattern in patterns):
-            matches.add(role)
-    return matches
+        for pattern in patterns:
+            if _compile_pattern(pattern).fullmatch(text):
+                matches.append((pattern.priority, role))
+    if not matches:
+        return set()
+    highest_priority = max(priority for priority, _ in matches)
+    return {
+        role for priority, role in matches if priority == highest_priority
+    }
 
 
 def _manual_number(text: str) -> str | None:
@@ -488,6 +522,7 @@ def _sections(document_root: etree._Element) -> tuple[SemanticSection, ...]:
         return ()
     result: list[SemanticSection] = []
     paragraph_index = 0
+    current_section_start = 1
     for element in body.iterchildren():
         if element.tag == f"{{{W_NS}}}p":
             paragraph_index += 1
@@ -501,7 +536,7 @@ def _sections(document_root: etree._Element) -> tuple[SemanticSection, ...]:
         result.append(
             SemanticSection(
                 location=f"section:{len(result) + 1}",
-                start_paragraph=1 if not result else paragraph_index + 1,
+                start_paragraph=current_section_start,
                 header_relationship_ids=tuple(
                     section_properties.xpath(
                         "./w:headerReference/@r:id", namespaces=NS
@@ -514,6 +549,8 @@ def _sections(document_root: etree._Element) -> tuple[SemanticSection, ...]:
                 ),
             )
         )
+        if element.tag == f"{{{W_NS}}}p":
+            current_section_start = paragraph_index + 1
     return tuple(result)
 
 
