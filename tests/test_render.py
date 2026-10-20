@@ -28,6 +28,13 @@ from thesis_format import render
 ROOT = Path(__file__).parents[1]
 BASELINE = ROOT / "tests" / "fixtures" / "render" / "baseline.json"
 SOFFICE = Path("/opt/homebrew/bin/soffice")
+CANONICAL_IMAGE_DIGEST = (
+    "sha256:cff7f1b011fea53ae7e731a4ceef8613ac689f97e777bad2e375b59a1784e548"
+)
+CANONICAL_IMAGE_REFERENCE = (
+    "ghcr.io/jiegaosunny/thesis-formatting-skill-render@"
+    f"{CANONICAL_IMAGE_DIGEST}"
+)
 
 
 def _sha256(path: Path) -> str:
@@ -74,6 +81,8 @@ def _environment(*, image_digest: str | None = "sha256:" + "a" * 64) -> dict:
         "timezone": "UTC",
         "soffice_path": str(SOFFICE),
         "timeout_seconds": 60,
+        "canonical_image_digest": CANONICAL_IMAGE_DIGEST,
+        "canonical_image_reference": CANONICAL_IMAGE_REFERENCE,
     }
 
 
@@ -88,9 +97,7 @@ def detected_version(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def canonical_runtime_digest(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(
-        "THESIS_RENDER_IMAGE_DIGEST", "sha256:" + "a" * 64
-    )
+    monkeypatch.setenv("THESIS_RENDER_IMAGE_DIGEST", CANONICAL_IMAGE_DIGEST)
     monkeypatch.delenv("THESIS_RENDER_MODE", raising=False)
 
 
@@ -123,7 +130,7 @@ def test_inspect_pdf_produces_valid_manifest_and_matches_baseline(
     assert manifest["renderer"] == {
         "name": "LibreOffice",
         "version": "LibreOffice 24.2.7.2 actual-build",
-        "image_digest": "sha256:" + "a" * 64,
+        "image_digest": CANONICAL_IMAGE_DIGEST,
     }
 
 
@@ -146,7 +153,7 @@ def test_inspect_pdf_requires_canonical_image_digest(
         inspect_pdf(pdf, _environment(image_digest=None))
 
 
-def test_canonical_image_digest_must_come_from_runtime_environment(
+def test_canonical_image_digest_must_match_pinned_environment_digest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     detected_version: None,
@@ -158,11 +165,14 @@ def test_canonical_image_digest_must_come_from_runtime_environment(
     with pytest.raises(CanonicalEnvironmentError, match="THESIS_RENDER_IMAGE_DIGEST"):
         inspect_pdf(pdf, _environment())
 
-    digest = "sha256:" + "b" * 64
-    monkeypatch.setenv("THESIS_RENDER_IMAGE_DIGEST", digest)
+    monkeypatch.setenv("THESIS_RENDER_IMAGE_DIGEST", "sha256:" + "b" * 64)
+    with pytest.raises(CanonicalEnvironmentError, match="pinned canonical digest"):
+        inspect_pdf(pdf, _environment())
+
+    monkeypatch.setenv("THESIS_RENDER_IMAGE_DIGEST", CANONICAL_IMAGE_DIGEST)
     manifest = inspect_pdf(pdf, _environment())
 
-    assert manifest["renderer"]["image_digest"] == digest
+    assert manifest["renderer"]["image_digest"] == CANONICAL_IMAGE_DIGEST
     assert manifest["environment"] == {
         "mode": "canonical",
         "canonical": True,
@@ -215,11 +225,13 @@ def test_cli_export_fails_canonical_acceptance_while_digest_is_pending(
     assert not (tmp_path / "output.pdf").exists()
 
 
-def test_render_environment_and_dockerfile_do_not_claim_unpublished_image() -> None:
+def test_render_environment_and_docs_pin_published_image() -> None:
     environment = json.loads(
         (ROOT / "render-environment.json").read_text(encoding="utf-8")
     )
     dockerfile = (ROOT / "Dockerfile.render").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme_zh = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
 
     assert "image_digest" not in environment["renderer"]
     assert "version" not in environment["renderer"]
@@ -229,7 +241,14 @@ def test_render_environment_and_dockerfile_do_not_claim_unpublished_image() -> N
     assert environment["renderer"]["local_detected_version"].startswith(
         "LibreOffice "
     )
-    assert environment["canonical_container_status"] == "runtime-digest-required"
+    assert environment["canonical_container_status"] == "published-pinned"
+    assert environment["canonical_image_digest"] == CANONICAL_IMAGE_DIGEST
+    assert environment["canonical_image_reference"] == CANONICAL_IMAGE_REFERENCE
+    assert CANONICAL_IMAGE_REFERENCE in environment["release_ci_instructions"]
+    assert f"THESIS_RENDER_IMAGE_DIGEST={CANONICAL_IMAGE_DIGEST}" in readme
+    assert CANONICAL_IMAGE_REFERENCE in readme
+    assert f"THESIS_RENDER_IMAGE_DIGEST={CANONICAL_IMAGE_DIGEST}" in readme_zh
+    assert CANONICAL_IMAGE_REFERENCE in readme_zh
     assert (
         "python:3.12.11-slim-bookworm@sha256:"
         "519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7"
@@ -494,9 +513,7 @@ def test_export_document_failure_leaves_no_outputs_and_can_retry(
         monkeypatch.setattr(render, "inspect_pdf", real_inspect)
     else:
         monkeypatch.undo()
-        monkeypatch.setenv(
-            "THESIS_RENDER_IMAGE_DIGEST", "sha256:" + "a" * 64
-        )
+        monkeypatch.setenv("THESIS_RENDER_IMAGE_DIGEST", CANONICAL_IMAGE_DIGEST)
         monkeypatch.setattr(render, "_run_soffice", _fake_soffice_conversion)
         monkeypatch.setattr(
             render,
@@ -512,7 +529,7 @@ def test_export_document_failure_leaves_no_outputs_and_can_retry(
     assert manifest_path.is_file()
 
 
-def test_export_document_records_supplied_runtime_image_digest(
+def test_export_document_records_pinned_runtime_image_digest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -520,8 +537,7 @@ def test_export_document_records_supplied_runtime_image_digest(
     source.write_bytes(b"docx")
     output = tmp_path / "output.pdf"
     manifest_path = tmp_path / "manifest.json"
-    digest = "sha256:" + "d" * 64
-    monkeypatch.setenv("THESIS_RENDER_IMAGE_DIGEST", digest)
+    monkeypatch.setenv("THESIS_RENDER_IMAGE_DIGEST", CANONICAL_IMAGE_DIGEST)
     monkeypatch.setattr(render, "_run_soffice", _fake_soffice_conversion)
     monkeypatch.setattr(
         render,
@@ -532,7 +548,7 @@ def test_export_document_records_supplied_runtime_image_digest(
     export_document(source, output, manifest_path, _environment())
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["renderer"]["image_digest"] == digest
+    assert manifest["renderer"]["image_digest"] == CANONICAL_IMAGE_DIGEST
     assert manifest["environment"] == {
         "mode": "canonical",
         "canonical": True,
@@ -644,9 +660,7 @@ def test_export_document_never_clobbers_racing_destination(
         "_detect_soffice_version",
         lambda _environment: "LibreOffice 24.2.7.2 actual-build",
     )
-    monkeypatch.setenv(
-        "THESIS_RENDER_IMAGE_DIGEST", "sha256:" + "c" * 64
-    )
+    monkeypatch.setenv("THESIS_RENDER_IMAGE_DIGEST", CANONICAL_IMAGE_DIGEST)
     real_inspect = render.inspect_pdf
 
     def inspect_with_race(*args, **kwargs):

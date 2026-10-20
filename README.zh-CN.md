@@ -14,12 +14,12 @@
 
 ```bash
 docker run --rm \
-  -e THESIS_RENDER_IMAGE_DIGEST=sha256:<64位小写十六进制> \
+  -e THESIS_RENDER_IMAGE_DIGEST=sha256:cff7f1b011fea53ae7e731a4ceef8613ac689f97e777bad2e375b59a1784e548 \
   -v "$PWD/render-environment.json:/app/render-environment.json:ro" \
-  thesis-formatting-render ...
+  ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:cff7f1b011fea53ae7e731a4ceef8613ac689f97e777bad2e375b59a1784e548 ...
 ```
 
-`render-environment.json` 只记录仓库、Debian 快照、区域设置和字体输入，并被明确排除在 Docker 构建上下文之外，避免镜像摘要成为自身构建输入。
+`render-environment.json` 记录仓库、Debian 快照、区域设置、字体输入及上述精确发布引用和摘要。CI 与容器调用必须使用相同的固定值。该文件被明确排除在 Docker 构建上下文之外，避免镜像摘要成为自身构建输入。
 
 本地开发必须通过 `THESIS_RENDER_MODE=local` 或渲染环境中的
 `"render_mode": "local"` 显式启用。本地清单会在

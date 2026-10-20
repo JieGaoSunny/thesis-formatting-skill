@@ -17,14 +17,16 @@ Canonical container exports require the immutable registry digest at runtime:
 
 ```bash
 docker run --rm \
-  -e THESIS_RENDER_IMAGE_DIGEST=sha256:<64-lowercase-hex> \
+  -e THESIS_RENDER_IMAGE_DIGEST=sha256:cff7f1b011fea53ae7e731a4ceef8613ac689f97e777bad2e375b59a1784e548 \
   -v "$PWD/render-environment.json:/app/render-environment.json:ro" \
-  thesis-formatting-render ...
+  ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:cff7f1b011fea53ae7e731a4ceef8613ac689f97e777bad2e375b59a1784e548 ...
 ```
 
 `render-environment.json` records repository, Debian snapshot, locale, and font
-inputs. It is deliberately excluded from the Docker build context so an image
-digest can never become an input to its own image build.
+inputs together with this exact published reference and digest. CI and
+container invocations must use the same pinned values. The file is deliberately
+excluded from the Docker build context so an image digest can never become an
+input to its own image build.
 
 Local development must be explicitly enabled with
 `THESIS_RENDER_MODE=local` or `"render_mode": "local"` in a supplied render

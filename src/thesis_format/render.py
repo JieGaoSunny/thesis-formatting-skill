@@ -90,13 +90,24 @@ def _load_environment(
             f"render mode must be one of {sorted(_RENDER_MODES)!r}"
         )
     digest = os.environ.get(_IMAGE_DIGEST_ENV)
-    if mode == "canonical" and (
-        not isinstance(digest, str) or not _IMAGE_DIGEST.fullmatch(digest)
-    ):
-        raise CanonicalEnvironmentError(
-            "canonical rendering requires a valid "
-            f"{_IMAGE_DIGEST_ENV}=sha256:<64 lowercase hex characters>"
-        )
+    if mode == "canonical":
+        pinned_digest = loaded.get("canonical_image_digest")
+        if not isinstance(pinned_digest, str) or not _IMAGE_DIGEST.fullmatch(
+            pinned_digest
+        ):
+            raise CanonicalEnvironmentError(
+                "render environment is missing a valid canonical_image_digest"
+            )
+        if not isinstance(digest, str) or not _IMAGE_DIGEST.fullmatch(digest):
+            raise CanonicalEnvironmentError(
+                "canonical rendering requires a valid "
+                f"{_IMAGE_DIGEST_ENV}=sha256:<64 lowercase hex characters>"
+            )
+        if digest != pinned_digest:
+            raise CanonicalEnvironmentError(
+                f"{_IMAGE_DIGEST_ENV} must equal the pinned canonical digest "
+                f"{pinned_digest}"
+            )
     if not isinstance(renderer.get("name"), str) or not renderer["name"]:
         raise CanonicalEnvironmentError("render environment is missing renderer name")
     expected_snapshot = renderer.get("expected_source_snapshot")
