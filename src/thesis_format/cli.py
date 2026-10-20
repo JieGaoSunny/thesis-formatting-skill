@@ -174,6 +174,7 @@ def _run_audit(args: argparse.Namespace) -> int:
     _require_file(args.profile, "profile")
     _reject_path_collisions(
         ("source", args.source),
+        ("profile", args.profile),
         ("report", args.report),
         ("markdown report", args.markdown),
     )
@@ -190,6 +191,7 @@ def _run_format(args: argparse.Namespace) -> int:
     _require_file(args.profile, "profile")
     _reject_path_collisions(
         ("source", args.source),
+        ("profile", args.profile),
         ("output", args.output),
         ("report", args.report),
     )
@@ -243,7 +245,11 @@ def _run_release_check(
 ) -> int:
     _require_file(args.source, "input")
     _require_file(args.profile, "profile")
-    _reject_path_collisions(("source", args.source), ("report", args.report))
+    _reject_path_collisions(
+        ("source", args.source),
+        ("profile", args.profile),
+        ("report", args.report),
+    )
     if function is None:
         raise RuntimeError(
             "optional privacy tooling is unavailable; install tooling that "

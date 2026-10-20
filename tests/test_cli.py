@@ -221,6 +221,114 @@ def test_collision_guard_rejects_resolved_report_manifest_alias(
         )
 
 
+@pytest.mark.parametrize("alias_kind", ("direct", "hardlink", "symlink"))
+@pytest.mark.parametrize(
+    ("command", "artifact_option"),
+    (
+        ("audit", "--report"),
+        ("audit", "--markdown"),
+        ("format", "--output"),
+        ("format", "--report"),
+        ("release-check", "--report"),
+    ),
+)
+def test_profile_input_cannot_alias_command_artifacts(
+    tmp_path: Path,
+    alias_kind: str,
+    command: str,
+    artifact_option: str,
+) -> None:
+    source = tmp_path / "source.docx"
+    source.write_bytes(FIXTURE.read_bytes())
+    profile = tmp_path / "profile.yaml"
+    profile.write_bytes(PROFILE.read_bytes())
+    profile_before = profile.read_bytes()
+    artifact = profile
+    if alias_kind != "direct":
+        artifact = tmp_path / f"{command}-{artifact_option[2:]}"
+        if alias_kind == "hardlink":
+            artifact.hardlink_to(profile)
+        else:
+            artifact.symlink_to(profile)
+
+    arguments = [
+        command,
+        str(source),
+        "--profile",
+        str(profile),
+    ]
+    if command == "audit":
+        arguments.extend(
+            [
+                "--report",
+                str(
+                    artifact
+                    if artifact_option == "--report"
+                    else tmp_path / "audit.json"
+                ),
+                "--markdown",
+                str(
+                    artifact
+                    if artifact_option == "--markdown"
+                    else tmp_path / "audit.md"
+                ),
+            ]
+        )
+    elif command == "format":
+        arguments.extend(
+            [
+                "--output",
+                str(
+                    artifact
+                    if artifact_option == "--output"
+                    else tmp_path / "formatted.docx"
+                ),
+                "--report",
+                str(
+                    artifact
+                    if artifact_option == "--report"
+                    else tmp_path / "transformation.json"
+                ),
+            ]
+        )
+    else:
+        arguments.extend(["--report", str(artifact)])
+
+    result = cli.main(
+        arguments,
+        dependencies=cli.CliDependencies(
+            privacy_check=lambda _source, _profile: pytest.fail(
+                "release check must not run after a profile collision"
+            )
+        ),
+    )
+
+    assert result == 2
+    assert profile.read_bytes() == profile_before
+
+
+@pytest.mark.parametrize("alias_kind", ("direct", "hardlink", "symlink"))
+def test_collision_guard_rejects_profile_manifest_alias(
+    tmp_path: Path,
+    alias_kind: str,
+) -> None:
+    profile = tmp_path / "profile.yaml"
+    profile.write_text("immutable profile", encoding="utf-8")
+    manifest = profile
+    if alias_kind != "direct":
+        manifest = tmp_path / "manifest.json"
+        if alias_kind == "hardlink":
+            manifest.hardlink_to(profile)
+        else:
+            manifest.symlink_to(profile)
+
+    with pytest.raises(ValueError, match="profile.*manifest"):
+        cli._reject_path_collisions(
+            ("profile", profile),
+            ("manifest", manifest),
+        )
+
+
 def test_missing_input_is_invalid_input_exit_2(tmp_path: Path) -> None:
     result = subprocess.run(
         [
