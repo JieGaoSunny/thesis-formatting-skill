@@ -14,9 +14,9 @@
 
 ```bash
 docker run --rm \
-  -e THESIS_RENDER_IMAGE_DIGEST=sha256:cff7f1b011fea53ae7e731a4ceef8613ac689f97e777bad2e375b59a1784e548 \
+  -e THESIS_RENDER_IMAGE_DIGEST=sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba \
   -v "$PWD/render-environment.json:/app/render-environment.json:ro" \
-  ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:cff7f1b011fea53ae7e731a4ceef8613ac689f97e777bad2e375b59a1784e548 ...
+  ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba ...
 ```
 
 `render-environment.json` 记录仓库、Debian 快照、区域设置、字体输入及上述精确发布引用和摘要。CI 与容器调用必须使用相同的固定值。该文件被明确排除在 Docker 构建上下文之外，避免镜像摘要成为自身构建输入。

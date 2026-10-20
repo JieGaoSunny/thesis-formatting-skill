@@ -12,8 +12,8 @@
   },
   "render_mode": "canonical",
   "canonical_container_status": "published-pinned",
-  "canonical_image_reference": "ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:cff7f1b011fea53ae7e731a4ceef8613ac689f97e777bad2e375b59a1784e548",
-  "canonical_image_digest": "sha256:cff7f1b011fea53ae7e731a4ceef8613ac689f97e777bad2e375b59a1784e548",
+  "canonical_image_reference": "ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba",
+  "canonical_image_digest": "sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba",
   "locale": "zh_CN.UTF-8",
   "timezone": "UTC",
   "soffice_path": "soffice",
@@ -25,5 +25,5 @@
     "locale_observed": "C.UTF-8",
     "verified_at": "2026-10-21T02:39:47+08:00"
   },
-  "release_ci_instructions": "Run ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:cff7f1b011fea53ae7e731a4ceef8613ac689f97e777bad2e375b59a1784e548 with THESIS_RENDER_IMAGE_DIGEST=sha256:cff7f1b011fea53ae7e731a4ceef8613ac689f97e777bad2e375b59a1784e548. For explicit noncanonical local development, set THESIS_RENDER_MODE=local."
+  "release_ci_instructions": "Run ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba with THESIS_RENDER_IMAGE_DIGEST=sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba. For explicit noncanonical local development, set THESIS_RENDER_MODE=local."
 }

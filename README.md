@@ -17,9 +17,9 @@ Canonical container exports require the immutable registry digest at runtime:
 
 ```bash
 docker run --rm \
-  -e THESIS_RENDER_IMAGE_DIGEST=sha256:cff7f1b011fea53ae7e731a4ceef8613ac689f97e777bad2e375b59a1784e548 \
+  -e THESIS_RENDER_IMAGE_DIGEST=sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba \
   -v "$PWD/render-environment.json:/app/render-environment.json:ro" \
-  ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:cff7f1b011fea53ae7e731a4ceef8613ac689f97e777bad2e375b59a1784e548 ...
+  ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:43d9adaf655699e6f5975ff355077319467b549aace7d2d0353003d1b66d3eba ...
 ```
 
 `render-environment.json` records repository, Debian snapshot, locale, and font
