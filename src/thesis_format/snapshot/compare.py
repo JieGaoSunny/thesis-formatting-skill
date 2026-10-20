@@ -121,6 +121,22 @@ def compare_snapshots(
     }
     shared = set(before_by_id) & set(after_by_id)
     differences: list[dict[str, object]] = []
+    for key in sorted(shared):
+        before_node = before_by_id[key]
+        after_node = after_by_id[key]
+        if (
+            before_node["node_type"]
+            in {"footnote_reference", "endnote_reference"}
+            and before_node["source_location"] != after_node["source_location"]
+        ):
+            differences.append(
+                {
+                    "kind": "changed",
+                    "node_id": str(before_node["node_id"]),
+                    "before": before_node,
+                    "after": after_node,
+                }
+            )
     shared_order_unchanged: dict[str, bool] = {}
     for collection in ("body", "headers", "footers"):
         before_shared = [

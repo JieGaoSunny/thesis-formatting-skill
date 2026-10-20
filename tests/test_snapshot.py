@@ -98,6 +98,33 @@ def _append_equation(paragraph, text: str) -> None:
     paragraph._p.append(math_paragraph)
 
 
+def _append_note_reference(paragraph, kind: str, note_id: int) -> None:
+    run = paragraph.add_run()
+    reference = OxmlElement(f"w:{kind}Reference")
+    reference.set(qn("w:id"), str(note_id))
+    run._r.append(reference)
+
+
+def _add_notes_part(path: Path, kind: str, notes: dict[int, str]) -> None:
+    replacement = path.with_suffix(f".{kind}-replacement.docx")
+    entries = "".join(
+        f'<w:{kind} w:id="{note_id}"><w:p><w:r><w:t>{text}</w:t>'
+        f"</w:r></w:p></w:{kind}>"
+        for note_id, text in notes.items()
+    )
+    content = (
+        f'<w:{kind}s xmlns:w="http://schemas.openxmlformats.org/'
+        f'wordprocessingml/2006/main">{entries}</w:{kind}s>'
+    ).encode()
+    with ZipFile(path) as source, ZipFile(
+        replacement, "w", compression=ZIP_DEFLATED
+    ) as target:
+        for info in source.infolist():
+            target.writestr(info, source.read(info.filename))
+        target.writestr(f"word/{kind}s.xml", content)
+    replacement.replace(path)
+
+
 def _png() -> BytesIO:
     return BytesIO(
         bytes.fromhex(
@@ -243,11 +270,147 @@ def test_repeated_identical_images_and_tables_get_distinct_occurrence_identities
         canonical_sha256([image_content_hash, "body", 2]),
     ]
     assert len(tables) == 2
-    table_content_hash = canonical_sha256(["same cell"])
+    table_content_hash = canonical_sha256(
+        {
+            "row_count": 1,
+            "column_count": 1,
+            "cells": [
+                {
+                    "row": 1,
+                    "column": 1,
+                    "grid_span": 1,
+                    "v_merge": None,
+                    "text": "same cell",
+                }
+            ],
+        }
+    )
     assert [node["relationship_hash"] for node in tables] == [
         canonical_sha256([table_content_hash, "body", 1]),
         canonical_sha256([table_content_hash, "body", 2]),
     ]
+
+
+def test_note_references_are_ordered_semantic_nodes_linked_to_note_content(
+    tmp_path: Path,
+) -> None:
+    before_document = Document()
+    first = before_document.add_paragraph("First")
+    _append_note_reference(first, "footnote", 4)
+    second = before_document.add_paragraph("Second")
+    _append_note_reference(second, "endnote", 7)
+    before_path = _save(before_document, tmp_path / "note-references-before.docx")
+    _add_notes_part(before_path, "footnote", {4: "Footnote content"})
+    _add_notes_part(before_path, "endnote", {7: "Endnote content"})
+
+    before = extract_snapshot(before_path, PROFILE)
+    assert [
+        (node["node_type"], node.get("note_id"), node["normalized_text"])
+        for node in before["body"]
+    ] == [
+        ("paragraph", None, "First"),
+        ("footnote_reference", "4", ""),
+        ("paragraph", None, "Second"),
+        ("endnote_reference", "7", ""),
+        ("footnote", "4", "Footnote content"),
+        ("endnote", "7", "Endnote content"),
+    ]
+    assert before["body"][1]["source_location"]["path"].endswith(
+        "/w:p[1]/w:footnoteReference[1]"
+    )
+    assert before["body"][3]["source_location"]["path"].endswith(
+        "/w:p[2]/w:endnoteReference[1]"
+    )
+
+    after_document = Document()
+    after_document.add_paragraph("First")
+    moved = after_document.add_paragraph("Second")
+    _append_note_reference(moved, "footnote", 4)
+    _append_note_reference(moved, "endnote", 7)
+    after_path = _save(after_document, tmp_path / "note-references-after.docx")
+    _add_notes_part(after_path, "footnote", {4: "Footnote content"})
+    _add_notes_part(after_path, "endnote", {7: "Endnote content"})
+
+    comparison = compare_snapshots(before, extract_snapshot(after_path, PROFILE))
+
+    assert comparison["equivalent"] is False
+    assert any(
+        difference["before"]["node_type"] == "footnote_reference"
+        for difference in comparison["differences"]
+        if difference["before"] is not None
+    )
+
+
+def test_table_identity_includes_shape_even_when_row_major_text_matches(
+    tmp_path: Path,
+) -> None:
+    before_document = Document()
+    before_table = before_document.add_table(rows=2, cols=2)
+    after_document = Document()
+    after_table = after_document.add_table(rows=1, cols=4)
+    for table in (before_table, after_table):
+        for cell, text in zip(
+            (cell for row in table.rows for cell in row.cells),
+            ("A", "B", "C", "D"),
+            strict=True,
+        ):
+            cell.text = text
+
+    before = extract_snapshot(
+        _save(before_document, tmp_path / "table-2x2.docx"), PROFILE
+    )
+    after = extract_snapshot(
+        _save(after_document, tmp_path / "table-1x4.docx"), PROFILE
+    )
+    before_cells = [node for node in before["body"] if node["node_type"] == "table"]
+    after_cells = [node for node in after["body"] if node["node_type"] == "table"]
+
+    assert before_cells[0]["table_geometry"]["row_count"] == 2
+    assert before_cells[0]["table_geometry"]["column_count"] == 2
+    assert after_cells[0]["table_geometry"]["row_count"] == 1
+    assert after_cells[0]["table_geometry"]["column_count"] == 4
+    assert before_cells[0]["relationship_hash"] != after_cells[0]["relationship_hash"]
+    assert compare_snapshots(before, after)["equivalent"] is False
+
+
+def test_table_geometry_records_spans_merges_and_logical_coordinates(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    table = document.add_table(rows=3, cols=3)
+    table.cell(0, 0).text = "Horizontal"
+    table.cell(0, 0).merge(table.cell(0, 1))
+    table.cell(1, 2).text = "Vertical"
+    table.cell(1, 2).merge(table.cell(2, 2))
+
+    snapshot = extract_snapshot(
+        _save(document, tmp_path / "table-spans-merges.docx"), PROFILE
+    )
+    cells = [node for node in snapshot["body"] if node["node_type"] == "table"]
+    geometries = [cell["table_geometry"] for cell in cells]
+
+    assert all(geometry["row_count"] == 3 for geometry in geometries)
+    assert all(geometry["column_count"] == 3 for geometry in geometries)
+    assert geometries[0] == {
+        "row_count": 3,
+        "column_count": 3,
+        "row": 1,
+        "column": 1,
+        "grid_span": 2,
+        "v_merge": None,
+    }
+    assert any(
+        geometry["row"] == 2
+        and geometry["column"] == 3
+        and geometry["v_merge"] == "restart"
+        for geometry in geometries
+    )
+    assert any(
+        geometry["row"] == 3
+        and geometry["column"] == 3
+        and geometry["v_merge"] == "continue"
+        for geometry in geometries
+    )
 
 
 def test_duplicate_nodes_get_ordinals_and_prefix_collisions_extend() -> None:

@@ -176,13 +176,21 @@ def _candidate(
     path: str,
     index: int,
     relationship_hash: str | None = None,
+    *,
+    note_id: str | None = None,
+    table_geometry: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    candidate: dict[str, object] = {
         "node_type": node_type,
         "source_location": _location(part, path, index),
         "normalized_text": text,
         "relationship_hash": relationship_hash,
     }
+    if note_id is not None:
+        candidate["note_id"] = note_id
+    if table_geometry is not None:
+        candidate["table_geometry"] = table_geometry
+    return candidate
 
 
 @dataclass
@@ -273,6 +281,92 @@ def _equations(
     return result
 
 
+def _note_references(
+    element: etree._Element,
+    part: str,
+    base_path: str,
+    source_index: int,
+) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    counts: Counter[str] = Counter()
+    for descendant in element.iter():
+        local = etree.QName(descendant).localname
+        if local not in {"footnoteReference", "endnoteReference"}:
+            continue
+        kind = local.removesuffix("Reference")
+        note_id = descendant.get(f"{W}id", "")
+        counts[kind] += 1
+        result.append(
+            _candidate(
+                f"{kind}_reference",
+                "",
+                part,
+                f"{base_path}/w:{local}[{counts[kind]}]",
+                source_index + len(result),
+                note_id=note_id,
+            )
+        )
+    return result
+
+
+def _table_cells(
+    table: etree._Element,
+    profile: FormatProfile,
+) -> tuple[list[tuple[etree._Element, str, dict[str, object]]], dict[str, object]]:
+    rows = table.xpath("./w:tr", namespaces=NS)
+    parsed: list[tuple[etree._Element, str, dict[str, object]]] = []
+    grid_column_count = len(table.xpath("./w:tblGrid/w:gridCol", namespaces=NS))
+    column_count = grid_column_count
+    for row_index, row in enumerate(rows, start=1):
+        grid_before = row.xpath("./w:trPr/w:gridBefore/@w:val", namespaces=NS)
+        grid_after = row.xpath("./w:trPr/w:gridAfter/@w:val", namespaces=NS)
+        column = (int(grid_before[0]) if grid_before else 0) + 1
+        for cell in row.xpath("./w:tc", namespaces=NS):
+            span_values = cell.xpath("./w:tcPr/w:gridSpan/@w:val", namespaces=NS)
+            grid_span = int(span_values[0]) if span_values else 1
+            merge_nodes = cell.xpath("./w:tcPr/w:vMerge", namespaces=NS)
+            v_merge: str | None = None
+            if merge_nodes:
+                v_merge = merge_nodes[0].get(f"{W}val") or "continue"
+            text = normalize_text(
+                " ".join(
+                    _clean_paragraph(paragraph, profile)
+                    for paragraph in cell.xpath(".//w:p", namespaces=NS)
+                )
+            )
+            geometry = {
+                "row_count": len(rows),
+                "column_count": 0,
+                "row": row_index,
+                "column": column,
+                "grid_span": grid_span,
+                "v_merge": v_merge,
+            }
+            parsed.append((cell, text, geometry))
+            column += grid_span
+        column_count = max(
+            column_count,
+            column - 1 + (int(grid_after[0]) if grid_after else 0),
+        )
+    for _, _, geometry in parsed:
+        geometry["column_count"] = column_count
+    signature = {
+        "row_count": len(rows),
+        "column_count": column_count,
+        "cells": [
+            {
+                "row": geometry["row"],
+                "column": geometry["column"],
+                "grid_span": geometry["grid_span"],
+                "v_merge": geometry["v_merge"],
+                "text": text,
+            }
+            for _, text, geometry in parsed
+        ],
+    }
+    return parsed, signature
+
+
 def _story_nodes(
     package: OoxmlPackage,
     profile: FormatProfile,
@@ -306,6 +400,14 @@ def _story_nodes(
                     )
                 )
                 source_index += 1
+            references = _note_references(
+                child,
+                "word/document.xml",
+                base_path,
+                source_index,
+            )
+            result.extend(references)
+            source_index += len(references)
             images = _images(
                 child,
                 package,
@@ -327,66 +429,57 @@ def _story_nodes(
             source_index += len(equations)
         elif local == "tbl":
             table_number += 1
-            cells = child.xpath("./w:tr/w:tc", namespaces=NS)
-            normalized_cells = [
-                normalize_text(
-                    " ".join(
-                        _clean_paragraph(paragraph, profile)
-                        for paragraph in cell.xpath(".//w:p", namespaces=NS)
+            cells, table_signature = _table_cells(child, profile)
+            table_hash = canonical_sha256(table_signature)
+            table_identity = object_identities.identity(table_hash, "body", "table")
+            row_physical_columns: Counter[int] = Counter()
+            for cell, text, geometry in cells:
+                row_index = int(geometry["row"])
+                row_physical_columns[row_index] += 1
+                cell_path = (
+                    f"/w:document/w:body/w:tbl[{table_number}]"
+                    f"/w:tr[{row_index}]/w:tc[{row_physical_columns[row_index]}]"
+                )
+                result.append(
+                    _candidate(
+                        "table",
+                        text,
+                        "word/document.xml",
+                        cell_path,
+                        source_index,
+                        table_identity,
+                        table_geometry=geometry,
                     )
                 )
-                for cell in cells
-            ]
-            table_hash = canonical_sha256(normalized_cells)
-            table_identity = object_identities.identity(table_hash, "body", "table")
-            cell_offset = 0
-            for row_index, row in enumerate(
-                child.xpath("./w:tr", namespaces=NS), start=1
-            ):
-                for column_index, cell in enumerate(
-                    row.xpath("./w:tc", namespaces=NS), start=1
-                ):
-                    result.append(
-                        _candidate(
-                            "table",
-                            normalized_cells[cell_offset],
-                            "word/document.xml",
-                            (
-                                f"/w:document/w:body/w:tbl[{table_number}]"
-                                f"/w:tr[{row_index}]/w:tc[{column_index}]"
-                            ),
-                            source_index,
-                            table_identity,
-                        )
-                    )
-                    source_index += 1
-                    cell_offset += 1
-                    result.extend(
-                        _images(
-                            cell,
-                            package,
-                            "word/document.xml",
-                            (
-                                f"/w:document/w:body/w:tbl[{table_number}]"
-                                f"/w:tr[{row_index}]/w:tc[{column_index}]"
-                            ),
-                            source_index,
-                            "body",
-                            object_identities,
-                        )
-                    )
-                    source_index = len(result)
-                    equations = _equations(
+                source_index += 1
+                references = _note_references(
+                    cell,
+                    "word/document.xml",
+                    cell_path,
+                    source_index,
+                )
+                result.extend(references)
+                source_index += len(references)
+                result.extend(
+                    _images(
                         cell,
+                        package,
                         "word/document.xml",
-                        (
-                            f"/w:document/w:body/w:tbl[{table_number}]"
-                            f"/w:tr[{row_index}]/w:tc[{column_index}]"
-                        ),
+                        cell_path,
                         source_index,
+                        "body",
+                        object_identities,
                     )
-                    result.extend(equations)
-                    source_index += len(equations)
+                )
+                source_index = len(result)
+                equations = _equations(
+                    cell,
+                    "word/document.xml",
+                    cell_path,
+                    source_index,
+                )
+                result.extend(equations)
+                source_index += len(equations)
     return result
 
 
@@ -432,6 +525,7 @@ def _note_nodes(
                     part,
                     base_path,
                     source_index + len(result),
+                    note_id=note_id,
                 )
             )
         result.extend(
@@ -515,59 +609,48 @@ def _section_story_nodes(
                         f"/section[{section_index}]/{kind}[{reference_type}]"
                         f"/w:tbl[{table_number}]"
                     )
-                    cells = child.xpath("./w:tr/w:tc", namespaces=NS)
-                    normalized_cells = [
-                        normalize_text(
-                            " ".join(
-                                _clean_paragraph(paragraph, profile)
-                                for paragraph in cell.xpath(".//w:p", namespaces=NS)
+                    cells, table_signature = _table_cells(child, profile)
+                    table_identity = object_identities.identity(
+                        canonical_sha256(table_signature), story, "table"
+                    )
+                    row_physical_columns: Counter[int] = Counter()
+                    for cell, text, geometry in cells:
+                        row_index = int(geometry["row"])
+                        row_physical_columns[row_index] += 1
+                        cell_path = (
+                            f"{base_path}/w:tr[{row_index}]"
+                            f"/w:tc[{row_physical_columns[row_index]}]"
+                        )
+                        result.append(
+                            _candidate(
+                                "table",
+                                text,
+                                part,
+                                cell_path,
+                                len(result),
+                                table_identity,
+                                table_geometry=geometry,
                             )
                         )
-                        for cell in cells
-                    ]
-                    table_identity = object_identities.identity(
-                        canonical_sha256(normalized_cells), story, "table"
-                    )
-                    cell_offset = 0
-                    for row_index, row in enumerate(
-                        child.xpath("./w:tr", namespaces=NS), start=1
-                    ):
-                        for column_index, cell in enumerate(
-                            row.xpath("./w:tc", namespaces=NS), start=1
-                        ):
-                            cell_path = (
-                                f"{base_path}/w:tr[{row_index}]/w:tc[{column_index}]"
+                        result.extend(
+                            _images(
+                                cell,
+                                package,
+                                part,
+                                cell_path,
+                                len(result),
+                                story,
+                                object_identities,
                             )
-                            result.append(
-                                _candidate(
-                                    "table",
-                                    normalized_cells[cell_offset],
-                                    part,
-                                    cell_path,
-                                    len(result),
-                                    table_identity,
-                                )
+                        )
+                        result.extend(
+                            _equations(
+                                cell,
+                                part,
+                                cell_path,
+                                len(result),
                             )
-                            cell_offset += 1
-                            result.extend(
-                                _images(
-                                    cell,
-                                    package,
-                                    part,
-                                    cell_path,
-                                    len(result),
-                                    story,
-                                    object_identities,
-                                )
-                            )
-                            result.extend(
-                                _equations(
-                                    cell,
-                                    part,
-                                    cell_path,
-                                    len(result),
-                                )
-                            )
+                        )
     return result
 
 
@@ -583,7 +666,7 @@ def assign_node_ids(
 
 
 def _assign_ids(collections: list[list[dict[str, object]]]) -> None:
-    counts: Counter[tuple[str, str, str]] = Counter()
+    counts: Counter[tuple[str, str, str, str]] = Counter()
     payloads: list[list[object]] = []
     nodes = [node for collection in collections for node in collection]
     for node in nodes:
@@ -591,6 +674,7 @@ def _assign_ids(collections: list[list[dict[str, object]]]) -> None:
             str(node["node_type"]),
             str(node["normalized_text"]),
             str(node.get("relationship_hash") or ""),
+            str(node.get("note_id") or ""),
         )
         ordinal = counts[key]
         counts[key] += 1
@@ -600,6 +684,7 @@ def _assign_ids(collections: list[list[dict[str, object]]]) -> None:
                 key[0],
                 key[1],
                 key[2],
+                key[3],
                 ordinal,
             ]
         )

@@ -32,10 +32,24 @@
       "required": ["node_id", "node_type", "source_location", "normalized_text"],
       "properties": {
         "node_id": {"type": "string", "minLength": 1},
-        "node_type": {"enum": ["paragraph", "caption", "table", "image", "equation", "header", "footer", "footnote", "endnote"]},
+        "node_type": {"enum": ["paragraph", "caption", "table", "image", "equation", "header", "footer", "footnote_reference", "endnote_reference", "footnote", "endnote"]},
         "source_location": {"$ref": "#/$defs/sourceLocation"},
         "normalized_text": {"type": "string"},
-        "relationship_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+        "relationship_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "note_id": {"type": "string"},
+        "table_geometry": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["row_count", "column_count", "row", "column", "grid_span", "v_merge"],
+          "properties": {
+            "row_count": {"type": "integer", "minimum": 1},
+            "column_count": {"type": "integer", "minimum": 1},
+            "row": {"type": "integer", "minimum": 1},
+            "column": {"type": "integer", "minimum": 1},
+            "grid_span": {"type": "integer", "minimum": 1},
+            "v_merge": {"type": ["string", "null"], "enum": ["restart", "continue", null]}
+          }
+        }
       }
     }
   }
