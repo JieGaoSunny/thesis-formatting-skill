@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
+from docx import Document
+from docx.enum.style import WD_STYLE_TYPE
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from PIL import Image
 
 from thesis_format.audit import audit_document
 from thesis_format.contracts import validate_transformation_result
@@ -13,6 +19,7 @@ from thesis_format.demo.defects import DEFECTS
 from thesis_format.format import format_document
 from thesis_format.ooxml import OoxmlPackage
 from thesis_format.profile import load_profile
+from thesis_format.snapshot import extract_snapshot
 
 from helpers.docx_factory import build_docx
 
@@ -23,7 +30,10 @@ NOW = datetime(2026, 10, 20, 10, 0, tzinfo=UTC)
 NS = {
     "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
     "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
+    "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    "ct": "http://schemas.openxmlformats.org/package/2006/content-types",
 }
+REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
 
 @pytest.mark.parametrize(
@@ -248,7 +258,391 @@ def test_table_caption_is_moved_above_with_bound_object_identity(
     assert change["operation"] == "move_caption"
     assert change["status"] == "applied"
     assert change["node_id"]
-    assert len(change["relationship_sha256"]) == 64
+    assert len(change["object_occurrence_sha256"]) == 64
+    assert change["before"] == {
+        "node_id": change["node_id"],
+        "object_occurrence_sha256": change["object_occurrence_sha256"],
+        "position": "below",
+    }
+    assert change["after"] == {
+        "node_id": change["node_id"],
+        "object_occurrence_sha256": change["object_occurrence_sha256"],
+        "position": "above",
+    }
+
+
+def _caption_test_document(
+    path: Path,
+    blocks: tuple[str, ...],
+) -> Path:
+    def append_field(paragraph, instruction: str, result: str) -> None:
+        run = paragraph.add_run()
+        begin = OxmlElement("w:fldChar")
+        begin.set(qn("w:fldCharType"), "begin")
+        code = OxmlElement("w:instrText")
+        code.set(qn("xml:space"), "preserve")
+        code.text = instruction
+        separate = OxmlElement("w:fldChar")
+        separate.set(qn("w:fldCharType"), "separate")
+        text = OxmlElement("w:t")
+        text.text = result
+        end = OxmlElement("w:fldChar")
+        end.set(qn("w:fldCharType"), "end")
+        run._r.extend((begin, code, separate, text, end))
+
+    def add_caption(label: str, title: str, style: str) -> None:
+        paragraph = document.add_paragraph()
+        paragraph.style = style
+        paragraph.add_run(f"{label} ")
+        append_field(paragraph, ' STYLEREF "AppleHeading1" \\n ', "1")
+        paragraph.add_run("-")
+        append_field(paragraph, f" SEQ {label} \\s 1 \\* ARABIC ", "1")
+        paragraph.add_run(f" {title}")
+
+    image_path = path.with_suffix(".png")
+    Image.new("RGB", (8, 8), "white").save(image_path)
+    document = Document()
+    for style_name in ("AppleFigureCaption", "AppleTableCaption", "AppleHeading1"):
+        if style_name not in document.styles:
+            document.styles.add_style(style_name, WD_STYLE_TYPE.PARAGRAPH)
+    for block in blocks:
+        if block == "figure":
+            document.add_paragraph().add_run().add_picture(str(image_path))
+        elif block == "two_images":
+            paragraph = document.add_paragraph()
+            paragraph.add_run().add_picture(str(image_path))
+            paragraph.add_run().add_picture(str(image_path))
+        elif block == "figure_caption":
+            add_caption("图", "苹果树", "AppleFigureCaption")
+        elif block == "table":
+            table = document.add_table(rows=1, cols=2)
+            table.cell(0, 0).text = "苹果"
+            table.cell(0, 1).text = "梨"
+        elif block == "table_caption":
+            add_caption("表", "苹果数据", "AppleTableCaption")
+        elif block == "separator":
+            document.add_paragraph("分隔正文")
+        else:
+            raise AssertionError(f"unknown block: {block}")
+    document.save(path)
+    image_path.unlink()
+    return path
+
+
+@pytest.mark.parametrize(
+    ("blocks", "rule_id"),
+    [
+        (("figure", "figure", "figure_caption"), "FIGURE.CAPTION.POSITION"),
+        (("table", "table", "table_caption"), "TABLE.CAPTION.POSITION"),
+    ],
+)
+def test_ambiguous_single_caption_for_two_objects_is_not_moved(
+    tmp_path: Path,
+    blocks: tuple[str, ...],
+    rule_id: str,
+) -> None:
+    source = _caption_test_document(tmp_path / "ambiguous.docx", blocks)
+    before_snapshot = extract_snapshot(source, PROFILE)
+
+    report = format_document(
+        source,
+        tmp_path / "formatted.docx",
+        PROFILE,
+        clock=lambda: NOW,
+    )
+
+    after_snapshot = extract_snapshot(tmp_path / "formatted.docx", PROFILE)
+    before_relevant = [
+        (node["node_type"], node["node_id"])
+        for node in before_snapshot["body"]
+        if node["node_type"] in {"caption", "image", "table"}
+    ]
+    after_relevant = [
+        (node["node_type"], node["node_id"])
+        for node in after_snapshot["body"]
+        if node["node_type"] in {"caption", "image", "table"}
+    ]
+    assert after_relevant == before_relevant
+    changes = [
+        change for change in report["changes"] if change["rule_id"] == rule_id
+    ]
+    assert changes
+    assert all(change["status"] == "skipped" for change in changes)
+    assert all(
+        change["operation"] == "preserve-ambiguous-caption-association"
+        for change in changes
+    )
+    assert any(
+        finding["rule_id"] == rule_id
+        for finding in report["post_audit"]["findings"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("blocks", "rule_id", "expected_position"),
+    [
+        (
+            ("figure_caption", "figure"),
+            "FIGURE.CAPTION.POSITION",
+            "below",
+        ),
+        (
+            ("table", "table_caption"),
+            "TABLE.CAPTION.POSITION",
+            "above",
+        ),
+    ],
+)
+def test_unique_swapped_caption_is_repaired_with_exact_occurrence_binding(
+    tmp_path: Path,
+    blocks: tuple[str, ...],
+    rule_id: str,
+    expected_position: str,
+) -> None:
+    source = _caption_test_document(tmp_path / "swapped.docx", blocks)
+
+    report = format_document(
+        source,
+        tmp_path / "formatted.docx",
+        PROFILE,
+        clock=lambda: NOW,
+    )
+
+    change = next(
+        change for change in report["changes"] if change["rule_id"] == rule_id
+    )
+    assert change["status"] == "applied"
+    assert change["operation"] == "move_caption"
+    assert change["before"]["node_id"] == change["node_id"]
+    assert (
+        change["before"]["object_occurrence_sha256"]
+        == change["object_occurrence_sha256"]
+    )
+    assert change["after"] == {
+        **change["before"],
+        "position": expected_position,
+    }
+    assert report["content_comparison"]["equivalent"] is True
+    assert rule_id not in {
+        finding["rule_id"] for finding in report["post_audit"]["findings"]
+    }
+
+
+def test_multi_image_paragraph_caption_is_not_moved_when_occurrence_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    source = _caption_test_document(
+        tmp_path / "multi-image.docx",
+        ("figure_caption", "two_images"),
+    )
+    before = extract_snapshot(source, PROFILE)
+
+    report = format_document(
+        source,
+        tmp_path / "formatted.docx",
+        PROFILE,
+        clock=lambda: NOW,
+    )
+
+    after = extract_snapshot(tmp_path / "formatted.docx", PROFILE)
+    assert [
+        (node["node_type"], node["node_id"]) for node in after["body"]
+    ] == [
+        (node["node_type"], node["node_id"]) for node in before["body"]
+    ]
+    change = next(
+        change
+        for change in report["changes"]
+        if change["rule_id"] == "FIGURE.CAPTION.POSITION"
+    )
+    assert change["status"] == "skipped"
+    assert change["operation"] == "preserve-ambiguous-caption-association"
+
+
+def test_second_table_caption_uses_second_table_occurrence_hash(
+    tmp_path: Path,
+) -> None:
+    source = _caption_test_document(
+        tmp_path / "second-table.docx",
+        (
+            "table_caption",
+            "table",
+            "separator",
+            "table",
+            "table_caption",
+        ),
+    )
+    table_hashes = list(
+        dict.fromkeys(
+            str(node["relationship_hash"])
+            for node in extract_snapshot(source, PROFILE)["body"]
+            if node["node_type"] == "table"
+        )
+    )
+    assert len(table_hashes) == 2
+
+    report = format_document(
+        source,
+        tmp_path / "formatted.docx",
+        PROFILE,
+        clock=lambda: NOW,
+    )
+
+    change = next(
+        change
+        for change in report["changes"]
+        if change["rule_id"] == "TABLE.CAPTION.POSITION"
+        and change["location"] == "table:2"
+    )
+    assert change["status"] == "applied"
+    assert change["object_occurrence_sha256"] == table_hashes[1]
+
+
+def test_formatter_creates_missing_body_header_footer_package_parts(
+    tmp_path: Path,
+) -> None:
+    source = build_docx(
+        tmp_path / "blank-stories.docx",
+        [{"text": "第一章 绪论", "style": "AppleHeading1"}],
+    )
+    before = OoxmlPackage.open(source)
+    assert not tuple(before.iter_part_names("word/header"))
+    assert not tuple(before.iter_part_names("word/footer"))
+
+    report = format_document(
+        source,
+        tmp_path / "formatted.docx",
+        PROFILE,
+        clock=lambda: NOW,
+    )
+
+    package = OoxmlPackage.open(tmp_path / "formatted.docx")
+    document = package.xml("word/document.xml")
+    relationships = package.xml("word/_rels/document.xml.rels")
+    content_types = package.xml("[Content_Types].xml")
+    header_references = document.xpath(
+        ".//w:sectPr/w:headerReference[@w:type='default']/@r:id",
+        namespaces=NS,
+    )
+    footer_references = document.xpath(
+        ".//w:sectPr/w:footerReference[@w:type='default']/@r:id",
+        namespaces=NS,
+    )
+    assert len(header_references) == len(footer_references) == 1
+    targets = {
+        relationship.get("Id"): relationship.get("Target")
+        for relationship in relationships.findall(f"{{{REL_NS}}}Relationship")
+    }
+    header_part = f"word/{targets[header_references[0]]}"
+    footer_part = f"word/{targets[footer_references[0]]}"
+    assert header_part in package.parts
+    assert footer_part in package.parts
+    assert package.xml(header_part).xpath(
+        ".//w:instrText[contains(., 'STYLEREF')]", namespaces=NS
+    )
+    assert package.xml(footer_part).xpath(
+        ".//w:instrText[contains(., 'PAGE')]", namespaces=NS
+    )
+    assert package.xml(footer_part).xpath(
+        ".//w:pPr/w:jc[@w:val='center']", namespaces=NS
+    )
+    overrides = {
+        item.get("PartName"): item.get("ContentType")
+        for item in content_types.findall(
+            "{http://schemas.openxmlformats.org/package/2006/content-types}Override"
+        )
+    }
+    assert overrides[f"/{header_part}"].endswith("header+xml")
+    assert overrides[f"/{footer_part}"].endswith("footer+xml")
+    corresponding = {
+        "HEADER.FOOTER.HEADER_REQUIRED",
+        "HEADER.FOOTER.HEADER_SOURCE",
+        "HEADER.FOOTER.FOOTER_REQUIRED",
+        "HEADER.FOOTER.PAGE_NUMBER",
+        "HEADER.FOOTER.PAGE_ALIGNMENT",
+    }
+    assert not (
+        corresponding
+        & {
+            finding["rule_id"]
+            for finding in report["post_audit"]["findings"]
+        }
+    )
+    assert all(
+        change["status"] == "applied"
+        for change in report["changes"]
+        if change["rule_id"] in corresponding
+    )
+
+
+def test_formatter_does_not_create_stories_for_unnumbered_title_section(
+    tmp_path: Path,
+) -> None:
+    source = build_docx(
+        tmp_path / "title-only.docx",
+        [{"text": "苹果大学学位论文", "style": "AppleTitleZH"}],
+    )
+
+    report = format_document(
+        source,
+        tmp_path / "formatted.docx",
+        PROFILE,
+        clock=lambda: NOW,
+    )
+
+    package = OoxmlPackage.open(tmp_path / "formatted.docx")
+    document = package.xml("word/document.xml")
+    assert not document.xpath(
+        ".//w:sectPr/w:headerReference | .//w:sectPr/w:footerReference",
+        namespaces=NS,
+    )
+    assert not tuple(package.iter_part_names("word/header"))
+    assert not tuple(package.iter_part_names("word/footer"))
+    assert not {
+        "HEADER.FOOTER.HEADER_REQUIRED",
+        "HEADER.FOOTER.FOOTER_REQUIRED",
+        "HEADER.FOOTER.PAGE_NUMBER",
+    } & {
+        finding["rule_id"] for finding in report["post_audit"]["findings"]
+    }
+
+
+def test_formatter_creates_fixed_text_header_from_profile(
+    tmp_path: Path,
+) -> None:
+    body = replace(
+        PROFILE.headers_footers.body,
+        header_source="fixed_text",
+        header_text="苹果大学",
+    )
+    profile = replace(
+        PROFILE,
+        headers_footers=replace(PROFILE.headers_footers, body=body),
+    )
+    source = build_docx(
+        tmp_path / "fixed-header.docx",
+        [{"text": "第一章 绪论", "style": "AppleHeading1"}],
+    )
+
+    report = format_document(
+        source,
+        tmp_path / "formatted.docx",
+        profile,
+        clock=lambda: NOW,
+    )
+
+    package = OoxmlPackage.open(tmp_path / "formatted.docx")
+    header_part = next(
+        name
+        for name in package.parts
+        if name.startswith("word/header") and name.endswith(".xml")
+    )
+    assert package.xml(header_part).xpath(
+        "string(.//w:p)", namespaces=NS
+    ) == "苹果大学"
+    assert "HEADER.FOOTER.HEADER_SOURCE" not in {
+        finding["rule_id"] for finding in report["post_audit"]["findings"]
+    }
 
 
 def _location_key(location: str) -> tuple[object, ...]:

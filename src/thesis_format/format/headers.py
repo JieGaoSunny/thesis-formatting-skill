@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import re
 
 from lxml import etree
@@ -14,9 +15,25 @@ from thesis_format.semantic import SemanticDocument
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+PR_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 NS = {"w": W_NS, "r": R_NS}
 W = f"{{{W_NS}}}"
 R = f"{{{R_NS}}}"
+PR = f"{{{PR_NS}}}"
+RELATIONSHIP_TYPE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+)
+CONTENT_TYPES = {
+    "header": (
+        "application/vnd.openxmlformats-officedocument."
+        "wordprocessingml.header+xml"
+    ),
+    "footer": (
+        "application/vnd.openxmlformats-officedocument."
+        "wordprocessingml.footer+xml"
+    ),
+}
 
 
 def _new(name: str, **attributes: str) -> etree._Element:
@@ -91,11 +108,185 @@ def _regions(
     return body, appendix
 
 
+def _semantic_section(
+    semantic: SemanticDocument,
+    paragraph_number: int,
+) -> int:
+    section_number = 1
+    for index, section in enumerate(semantic.sections, start=1):
+        if section.start_paragraph <= paragraph_number:
+            section_number = index
+        else:
+            break
+    return section_number
+
+
+def _front_part(
+    semantic: SemanticDocument,
+    profile: FormatProfile,
+    section_number: int,
+    body_paragraph: int | None,
+):
+    nodes = [
+        node
+        for node in semantic.paragraphs
+        if (
+            body_paragraph is None
+            or int(node.location.split(":")[1]) < body_paragraph
+        )
+        and _semantic_section(
+            semantic, int(node.location.split(":")[1])
+        )
+        == section_number
+    ]
+    for part in profile.front_matter.parts:
+        expected_styles = {
+            value.casefold()
+            for value in profile.styles[part.heading_role].word_styles
+        }
+        if any(
+            node.role == part.heading_role
+            or (
+                node.style_id is not None
+                and node.style_id.casefold() in expected_styles
+            )
+            for node in nodes
+        ):
+            return part
+    return None
+
+
 def _story_has_field(root: etree._Element, prefix: str) -> bool:
     return any(
         re.sub(r"\s+", " ", value).strip().upper().startswith(prefix.upper())
         for value in root.xpath(".//w:instrText/text()", namespaces=NS)
     )
+
+
+def _next_part_name(package: OoxmlPackage, kind: str) -> str:
+    existing = set(package.parts) | set(package._xml)
+    number = 1
+    while f"word/{kind}{number}.xml" in existing:
+        number += 1
+    return f"word/{kind}{number}.xml"
+
+
+def _next_relationship_id(root: etree._Element) -> str:
+    existing = {
+        element.get("Id")
+        for element in root.findall(f"{PR}Relationship")
+    }
+    number = 1
+    while f"rId{number}" in existing:
+        number += 1
+    return f"rId{number}"
+
+
+def _ensure_override(
+    package: OoxmlPackage,
+    part_name: str,
+    kind: str,
+) -> None:
+    root = package.xml("[Content_Types].xml")
+    part = f"/{part_name}"
+    matches = root.xpath(
+        "./ct:Override[@PartName=$part]",
+        namespaces={"ct": CT_NS},
+        part=part,
+    )
+    override = matches[0] if matches else etree.SubElement(
+        root, f"{{{CT_NS}}}Override"
+    )
+    override.set("PartName", part)
+    override.set("ContentType", CONTENT_TYPES[kind])
+
+
+def _new_story_root(kind: str) -> etree._Element:
+    return etree.Element(
+        f"{W}{'hdr' if kind == 'header' else 'ftr'}",
+        nsmap={"w": W_NS, "r": R_NS},
+    )
+
+
+def _set_paragraph_style(
+    paragraph: etree._Element,
+    style_id: str | None,
+) -> etree._Element:
+    p_pr = paragraph.find("w:pPr", namespaces=NS)
+    if p_pr is None:
+        p_pr = etree.Element(f"{W}pPr")
+        paragraph.insert(0, p_pr)
+    if style_id:
+        p_style = p_pr.find("w:pStyle", namespaces=NS)
+        if p_style is None:
+            p_style = etree.SubElement(p_pr, f"{W}pStyle")
+        p_style.set(f"{W}val", style_id)
+    return p_pr
+
+
+def _write_header(
+    root: etree._Element,
+    region_profile,
+    expected_style: str | None,
+    paragraph_style: str,
+) -> None:
+    if expected_style and _story_has_field(
+        root, f'STYLEREF "{expected_style}"'
+    ):
+        return
+    expected_text = re.sub(
+        r"\s+", " ", region_profile.header_text or ""
+    ).strip()
+    if (
+        region_profile.header_source in {"fixed", "fixed_text"}
+        and any(
+            re.sub(r"\s+", " ", text).strip() == expected_text
+            for text in root.xpath(".//w:p//w:t/text()", namespaces=NS)
+        )
+    ):
+        return
+    paragraphs = root.xpath(".//w:p", namespaces=NS)
+    paragraph = paragraphs[0] if paragraphs else etree.SubElement(root, f"{W}p")
+    _set_paragraph_style(paragraph, paragraph_style)
+    if expected_style:
+        _field(paragraph, f'STYLEREF "{expected_style}"', "")
+    elif region_profile.header_source in {"fixed", "fixed_text"}:
+        for child in list(paragraph):
+            if etree.QName(child).localname != "pPr":
+                paragraph.remove(child)
+        run = etree.SubElement(paragraph, f"{W}r")
+        text = etree.SubElement(run, f"{W}t")
+        text.text = region_profile.header_text or ""
+
+
+def _write_footer(root: etree._Element, alignment: str) -> None:
+    page_paragraph = next(
+        (
+            paragraph
+            for paragraph in root.xpath(".//w:p", namespaces=NS)
+            if _story_has_field(paragraph, "PAGE")
+        ),
+        None,
+    )
+    if page_paragraph is not None:
+        p_pr = _set_paragraph_style(page_paragraph, None)
+        jc = p_pr.find("w:jc", namespaces=NS)
+        if jc is None:
+            jc = etree.SubElement(p_pr, f"{W}jc")
+        jc.set(f"{W}val", alignment)
+        return
+    placeholder = "".join(root.xpath(".//w:t/text()", namespaces=NS))
+    for child in list(root):
+        root.remove(child)
+    paragraph = etree.SubElement(root, f"{W}p")
+    p_pr = _set_paragraph_style(paragraph, None)
+    jc = etree.SubElement(p_pr, f"{W}jc")
+    jc.set(f"{W}val", alignment)
+    _field(paragraph, "PAGE", "")
+    if placeholder and placeholder != "1":
+        run = etree.SubElement(paragraph, f"{W}r")
+        text = etree.SubElement(run, f"{W}t")
+        text.text = placeholder
 
 
 def repair_headers(
@@ -105,35 +296,86 @@ def repair_headers(
     profile: FormatProfile,
     findings: list[dict[str, object]],
 ) -> set[str]:
-    """Repair section stories using only existing package parts and targets."""
+    """Create and repair section stories, relationships, and package metadata."""
 
     repaired: set[str] = set()
     sections = document.xpath(".//w:sectPr", namespaces=NS)
     body_section, appendix_section = _regions(sections, semantic)
-    relationships = {
-        (relationship.type.rsplit("/", 1)[-1], relationship.id): (
-            resolve_relationship_target(
-                relationship.source_part, relationship.target
-            )
+    body_paragraph = next(
+        (
+            int(node.location.split(":")[1])
+            for node in semantic.paragraphs
+            if node.role == "heading_1"
+        ),
+        None,
+    )
+    rels_name = "word/_rels/document.xml.rels"
+    if rels_name in package.parts:
+        rels_root = package.xml(rels_name)
+    else:
+        rels_root = etree.Element(
+            f"{PR}Relationships", nsmap={None: PR_NS}
         )
-        for relationship in package.relationships()
-        if relationship.source_part == "word/document.xml"
-        and relationship.target_mode != "External"
-    }
-    ids_by_target = {
-        (kind, target): relationship_id
-        for (kind, relationship_id), target in relationships.items()
-    }
-    header_targets = [
-        target
-        for target in package.parts
-        if re.fullmatch(r"word/header\d+\.xml", target)
-    ]
-    footer_targets = [
-        target
-        for target in package.parts
-        if re.fullmatch(r"word/footer\d+\.xml", target)
-    ]
+        package._xml[rels_name] = rels_root
+
+    def relationship_target(relationship_id: str | None) -> str | None:
+        if not relationship_id:
+            return None
+        relationship = rels_root.find(
+            f"{PR}Relationship[@Id='{relationship_id}']"
+        )
+        if relationship is None or relationship.get("TargetMode") == "External":
+            return None
+        target = relationship.get("Target")
+        return (
+            resolve_relationship_target("word/document.xml", target)
+            if target
+            else None
+        )
+
+    def relationship_id(kind: str, target: str) -> str:
+        relative = target.removeprefix("word/")
+        for relationship in rels_root.findall(f"{PR}Relationship"):
+            if (
+                relationship.get("Type") == f"{RELATIONSHIP_TYPE}/{kind}"
+                and relationship.get("Target") == relative
+            ):
+                return str(relationship.get("Id"))
+        identifier = _next_relationship_id(rels_root)
+        relationship = etree.SubElement(rels_root, f"{PR}Relationship")
+        relationship.set("Id", identifier)
+        relationship.set("Type", f"{RELATIONSHIP_TYPE}/{kind}")
+        relationship.set("Target", relative)
+        return identifier
+
+    def create_story(
+        kind: str,
+        source_target: str | None = None,
+    ) -> tuple[str, str]:
+        target = _next_part_name(package, kind)
+        package._xml[target] = (
+            deepcopy(package.xml(source_target))
+            if source_target is not None
+            else _new_story_root(kind)
+        )
+        _ensure_override(package, target, kind)
+        return target, relationship_id(kind, target)
+
+    def set_reference(
+        section: etree._Element,
+        kind: str,
+        identifier: str,
+    ) -> None:
+        reference = section.find(
+            f"w:{kind}Reference[@w:type='default']", namespaces=NS
+        )
+        if reference is None:
+            reference = etree.Element(f"{W}{kind}Reference")
+            reference.set(f"{W}type", "default")
+            section.insert(0, reference)
+        reference.set(f"{R}id", identifier)
+
+    previous_targets: dict[str, str | None] = {"header": None, "footer": None}
 
     for index, section in enumerate(sections, start=1):
         region = (
@@ -144,132 +386,149 @@ def repair_headers(
             else "front_matter"
         )
         region_profile = getattr(profile.headers_footers, region)
+        front_part = (
+            _front_part(
+                semantic,
+                profile,
+                index,
+                body_paragraph,
+            )
+            if region == "front_matter"
+            else None
+        )
+        header_enabled = region_profile.header_enabled and (
+            front_part is None or front_part.show_header
+        )
+        page_number_enabled = region_profile.page_number_enabled and (
+            front_part is None or front_part.page_number_style != "none"
+        )
+        page_number_style = (
+            front_part.page_number_style
+            if front_part is not None
+            else region_profile.page_number_style
+        )
         expected_role = {
             "current_front_heading": "front_heading",
             "current_heading_1": "heading_1",
             "current_appendix": "appendix_heading",
             "current_appendix_heading": "appendix_heading",
         }.get(region_profile.header_source)
-        if expected_role:
-            expected_style = profile.styles[expected_role].word_styles[0]
-            reference = section.find(
+        expected_style = (
+            profile.styles[expected_role].word_styles[0]
+            if expected_role
+            else None
+        )
+        linking = profile.headers_footers.section_linking
+        link_header = (
+            index > 1
+            and {
+                "front_matter": False,
+                "body": linking.link_body_headers,
+                "appendix": linking.link_appendix_headers,
+            }[region]
+            and header_enabled
+        )
+        link_footer = (
+            index > 1
+            and {
+                "front_matter": False,
+                "body": linking.link_body_footers,
+                "appendix": linking.link_appendix_footers,
+            }[region]
+            and page_number_enabled
+        )
+
+        if header_enabled:
+            header_reference = section.find(
                 "w:headerReference[@w:type='default']", namespaces=NS
             )
-            current_target = (
-                relationships.get(("header", reference.get(f"{R}id", "")))
-                if reference is not None
+            header_target = (
+                previous_targets["header"] if link_header else None
+            ) or relationship_target(
+                header_reference.get(f"{R}id")
+                if header_reference is not None
                 else None
             )
-            if current_target is not None:
-                root = package.xml(current_target)
-                if not _story_has_field(
-                    root, f'STYLEREF "{expected_style}"'
-                ):
-                    paragraphs = root.xpath(".//w:p", namespaces=NS)
-                    paragraph = (
-                        paragraphs[0]
-                        if paragraphs
-                        else etree.SubElement(root, f"{W}p")
-                    )
-                    placeholder = "".join(
-                        paragraph.xpath(".//w:t/text()", namespaces=NS)
-                    )
-                    for child in list(paragraph):
-                        if etree.QName(child).localname != "pPr":
-                            paragraph.remove(child)
-                    _field(
-                        paragraph,
-                        f'STYLEREF "{expected_style}"',
-                        "",
-                    )
-                    if placeholder:
-                        run = _new("r")
-                        text = _new("t")
-                        text.text = placeholder
-                        run.append(text)
-                        paragraph.append(run)
+            if (
+                header_target is None
+                or (
+                    not link_header
+                    and header_target == previous_targets["header"]
+                )
+            ):
+                header_target, header_id = create_story(
+                    "header", header_target
+                )
             else:
-                target = next(
-                    (
-                        name
-                        for name in header_targets
-                        if _story_has_field(
-                            package.xml(name),
-                            f'STYLEREF "{expected_style}"',
-                        )
-                    ),
-                    None,
-                )
-                relationship_id = (
-                    ids_by_target.get(("header", target)) if target else None
-                )
-                if relationship_id:
-                    if reference is None:
-                        reference = etree.Element(f"{W}headerReference")
-                        reference.set(f"{W}type", "default")
-                        section.insert(0, reference)
-                    reference.set(f"{R}id", relationship_id)
-
-        footer_reference = section.find(
-            "w:footerReference[@w:type='default']", namespaces=NS
-        )
-        footer_target = None
-        if footer_reference is not None:
-            footer_target = relationships.get(
-                ("footer", footer_reference.get(f"{R}id", ""))
+                header_id = relationship_id("header", header_target)
+            set_reference(section, "header", header_id)
+            _write_header(
+                package.xml(header_target),
+                region_profile,
+                expected_style,
+                profile.styles[
+                    region_profile.header_style_role
+                ].word_styles[0],
             )
-        if footer_target is None and footer_targets:
-            footer_target = footer_targets[0]
-        if footer_target and region_profile.page_number_enabled:
-            root = package.xml(footer_target)
-            page_paragraph = next(
-                (
-                    paragraph
-                    for paragraph in root.xpath(".//w:p", namespaces=NS)
-                    if _story_has_field(paragraph, "PAGE")
+            previous_targets["header"] = header_target
+        else:
+            previous_targets["header"] = relationship_target(
+                section.xpath(
+                    "./w:headerReference[@w:type='default']/@r:id",
+                    namespaces=NS,
+                )[0]
+                if section.xpath(
+                    "./w:headerReference[@w:type='default']/@r:id",
+                    namespaces=NS,
+                )
+                else None
+            )
+
+        if page_number_enabled:
+            footer_reference = section.find(
+                "w:footerReference[@w:type='default']", namespaces=NS
+            )
+            footer_target = (
+                previous_targets["footer"] if link_footer else None
+            ) or relationship_target(
+                footer_reference.get(f"{R}id")
+                if footer_reference is not None
+                else None
+            )
+            if (
+                footer_target is None
+                or (
+                    not link_footer
+                    and footer_target == previous_targets["footer"]
+                )
+            ):
+                footer_target, footer_id = create_story(
+                    "footer", footer_target
+                )
+            else:
+                footer_id = relationship_id("footer", footer_target)
+            set_reference(section, "footer", footer_id)
+            _write_footer(
+                package.xml(footer_target),
+                region_profile.page_number_alignment,
+            )
+            previous_targets["footer"] = footer_target
+
+        if page_number_enabled:
+            pg_num = section.find("w:pgNumType", namespaces=NS)
+            if pg_num is None:
+                pg_num = etree.Element(f"{W}pgNumType")
+                _insert_by_schema_order(section, pg_num)
+            pg_num.set(
+                f"{W}fmt",
+                {"upper_roman": "upperRoman", "decimal": "decimal"}.get(
+                    page_number_style, "decimal"
                 ),
-                None,
             )
-            if page_paragraph is None:
-                paragraphs = root.xpath(".//w:p", namespaces=NS)
-                page_paragraph = paragraphs[0] if paragraphs else etree.SubElement(
-                    root, f"{W}p"
+            if index == body_section:
+                pg_num.set(
+                    f"{W}start", str(profile.fields.page_number.body_start)
                 )
-                placeholder = "".join(
-                    page_paragraph.xpath(".//w:t/text()", namespaces=NS)
-                ) or "1"
-                for child in list(page_paragraph):
-                    if etree.QName(child).localname != "pPr":
-                        page_paragraph.remove(child)
-                _field(page_paragraph, "PAGE", "")
-                if placeholder != "1":
-                    run = _new("r")
-                    text = _new("t")
-                    text.text = placeholder
-                    run.append(text)
-                    page_paragraph.append(run)
-            p_pr = page_paragraph.find("w:pPr", namespaces=NS)
-            if p_pr is None:
-                p_pr = etree.Element(f"{W}pPr")
-                page_paragraph.insert(0, p_pr)
-            jc = p_pr.find("w:jc", namespaces=NS)
-            if jc is None:
-                jc = etree.SubElement(p_pr, f"{W}jc")
-            jc.set(f"{W}val", region_profile.page_number_alignment)
-
-        pg_num = section.find("w:pgNumType", namespaces=NS)
-        if pg_num is None:
-            pg_num = etree.Element(f"{W}pgNumType")
-            _insert_by_schema_order(section, pg_num)
-        page_style = region_profile.page_number_style
-        pg_num.set(
-            f"{W}fmt",
-            {"upper_roman": "upperRoman", "decimal": "decimal"}.get(
-                page_style, "decimal"
-            ),
-        )
-        if index == body_section:
-            pg_num.set(f"{W}start", str(profile.fields.page_number.body_start))
 
     for finding in findings:
         rule_id = str(finding["rule_id"])

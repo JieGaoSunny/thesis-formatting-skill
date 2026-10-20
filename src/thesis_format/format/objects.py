@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
+
 from lxml import etree
 
 from thesis_format.demo.build import _insert_by_schema_order
@@ -13,6 +16,181 @@ W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 NS = {"w": W_NS, "wp": WP_NS}
 W = f"{{{W_NS}}}"
+
+
+@dataclass(frozen=True)
+class _Block:
+    kind: str
+    element: etree._Element
+    paragraph_index: int | None = None
+    object_number: int | None = None
+    caption_location: str | None = None
+    number: str | None = None
+    bookmarks: frozenset[str] = frozenset()
+    object_count: int = 1
+
+
+def _normalized_marker(value: str) -> str:
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", value.casefold())
+
+
+def _number_marker(text: str) -> str | None:
+    match = re.match(
+        r"^\s*(?:图|表|figure|table)\s*([0-9A-Z]+(?:[.\-—][0-9A-Z]+)*)",
+        text,
+        re.IGNORECASE,
+    )
+    return _normalized_marker(match.group(1)) if match else None
+
+
+def _element_bookmarks(element: etree._Element) -> frozenset[str]:
+    return frozenset(
+        _normalized_marker(value)
+        for value in element.xpath(".//w:bookmarkStart/@w:name", namespaces=NS)
+        if value and not value.startswith("_")
+    )
+
+
+def _object_markers(block: _Block) -> set[str]:
+    markers = set(block.bookmarks)
+    if block.kind == "figure":
+        markers.update(
+            _normalized_marker(value)
+            for value in block.element.xpath(
+                ".//wp:docPr/@title | .//wp:docPr/@descr", namespaces=NS
+            )
+            if value
+        )
+    return {marker for marker in markers if marker}
+
+
+def _explicitly_matches(caption: _Block, object_block: _Block) -> bool:
+    caption_markers = set(caption.bookmarks)
+    if caption.number:
+        caption_markers.add(caption.number)
+    object_markers = _object_markers(object_block)
+    return bool(
+        caption_markers
+        and object_markers
+        and any(
+            left == right or left in right or right in left
+            for left in caption_markers
+            for right in object_markers
+        )
+    )
+
+
+def _body_blocks(
+    body: etree._Element,
+    semantic: SemanticDocument,
+) -> list[_Block]:
+    semantic_by_element = {
+        id(element): node
+        for element, node in zip(
+            body.xpath(".//w:p", namespaces=NS),
+            semantic.paragraphs,
+            strict=True,
+        )
+    }
+    blocks: list[_Block] = []
+    paragraph_number = 0
+    table_number = 0
+    for child in body:
+        if not isinstance(child.tag, str):
+            continue
+        local_name = etree.QName(child).localname
+        if local_name == "p":
+            paragraph_number += 1
+            node = semantic_by_element.get(id(child))
+            if child.xpath(".//w:drawing", namespaces=NS):
+                kind = "figure"
+            elif node is not None and node.role in {
+                "figure_caption",
+                "table_caption",
+            }:
+                kind = node.role
+            else:
+                kind = "other"
+            blocks.append(
+                _Block(
+                    kind=kind,
+                    element=child,
+                    paragraph_index=paragraph_number,
+                    caption_location=(
+                        node.location if kind.endswith("_caption") else None
+                    ),
+                    number=_number_marker(node.raw_text) if node is not None else None,
+                    bookmarks=(
+                        frozenset(_normalized_marker(value) for value in node.bookmarks)
+                        if node is not None
+                        else frozenset()
+                    ),
+                    object_count=len(
+                        child.xpath(".//w:drawing", namespaces=NS)
+                    )
+                    if kind == "figure"
+                    else 1,
+                )
+            )
+        elif local_name == "tbl":
+            table_number += 1
+            blocks.append(
+                _Block(
+                    kind="table",
+                    element=child,
+                    object_number=table_number,
+                    bookmarks=_element_bookmarks(child),
+                )
+            )
+        else:
+            blocks.append(_Block(kind="other", element=child))
+    return blocks
+
+
+def _caption_associations(
+    blocks: list[_Block],
+    object_kind: str,
+) -> tuple[dict[int, _Block], set[int]]:
+    caption_kind = f"{object_kind}_caption"
+    relevant = {object_kind, caption_kind}
+    associations: dict[int, _Block] = {}
+    ambiguous: set[int] = set()
+    start = 0
+    while start < len(blocks):
+        if blocks[start].kind not in relevant:
+            start += 1
+            continue
+        end = start
+        while end < len(blocks) and blocks[end].kind in relevant:
+            end += 1
+        group = blocks[start:end]
+        objects = [block for block in group if block.kind == object_kind]
+        captions = [block for block in group if block.kind == caption_kind]
+        invalid_objects = [
+            block for block in objects if block.object_count != 1
+        ]
+        if invalid_objects:
+            ambiguous.update(id(block.element) for block in objects)
+            start = end
+            continue
+        explicit_pairs = [
+            (object_block, caption)
+            for object_block in objects
+            for caption in captions
+            if _explicitly_matches(caption, object_block)
+        ]
+        if len(explicit_pairs) == 1:
+            object_block, caption = explicit_pairs[0]
+            associations[id(object_block.element)] = caption
+            for candidate in objects:
+                if candidate is not object_block:
+                    ambiguous.add(id(candidate.element))
+        elif len(objects) == 1 and len(captions) == 1:
+            associations[id(objects[0].element)] = captions[0]
+        else:
+            ambiguous.update(id(block.element) for block in objects)
+        start = end
+    return associations, ambiguous
 
 
 def _property(parent: etree._Element, group: str, name: str) -> etree._Element:
@@ -40,17 +218,33 @@ def repair_objects(
     semantic: SemanticDocument,
     profile: FormatProfile,
     findings: list[dict[str, object]],
-) -> tuple[set[str], list[dict[str, object]]]:
+) -> tuple[
+    set[str],
+    dict[str, dict[str, object]],
+    dict[str, str],
+]:
     """Repair object layout and return caption-move metadata."""
 
     repaired: set[str] = set()
-    moves: list[dict[str, object]] = []
+    moves: dict[str, dict[str, object]] = {}
+    unrepaired: dict[str, str] = {}
     paragraphs = document.xpath(".//w:body//w:p", namespaces=NS)
-    semantic_by_location = {node.location: node for node in semantic.paragraphs}
     body = document.find("w:body", namespaces=NS)
     if body is None:
-        return repaired, moves
-    body_children = [child for child in body if isinstance(child.tag, str)]
+        return repaired, moves, unrepaired
+    blocks = _body_blocks(body, semantic)
+    figure_associations, ambiguous_figures = _caption_associations(
+        blocks, "figure"
+    )
+    table_associations, ambiguous_tables = _caption_associations(blocks, "table")
+    table_by_number = {
+        block.object_number: block
+        for block in blocks
+        if block.kind == "table"
+    }
+    figure_by_element = {
+        id(block.element): block for block in blocks if block.kind == "figure"
+    }
 
     for finding in findings:
         rule_id = str(finding["rule_id"])
@@ -73,28 +267,36 @@ def repair_objects(
                     f"{W}val", profile.figures.alignment
                 )
             elif rule_id == "FIGURE.CAPTION.POSITION":
-                object_child = paragraph
-                child_index = body_children.index(object_child)
-                candidates = []
-                for candidate_index, child in enumerate(body_children):
-                    if etree.QName(child).localname != "p":
-                        continue
-                    try:
-                        paragraph_index = paragraphs.index(child) + 1
-                    except ValueError:
-                        continue
-                    node = semantic_by_location.get(f"paragraph:{paragraph_index}")
-                    if node is not None and node.role == "figure_caption":
-                        candidates.append((abs(candidate_index - child_index), child))
-                if candidates:
-                    caption = min(candidates, key=lambda item: item[0])[1]
-                    body.remove(caption)
-                    body.insert(
-                        body.index(object_child)
-                        + (1 if profile.figures.caption_position == "below" else 0),
-                        caption,
+                key = f"{rule_id}|{location}"
+                association = figure_associations.get(id(paragraph))
+                figure_block = figure_by_element.get(id(paragraph))
+                if association is None or figure_block is None:
+                    unrepaired[key] = (
+                        "ambiguous"
+                        if id(paragraph) in ambiguous_figures
+                        else "missing"
                     )
-                    moves.append({"rule_id": rule_id, "caption": caption})
+                    continue
+                caption = association.element
+                before_position = (
+                    "above"
+                    if body.index(caption) < body.index(paragraph)
+                    else "below"
+                )
+                body.remove(caption)
+                body.insert(
+                    body.index(paragraph)
+                    + (1 if profile.figures.caption_position == "below" else 0),
+                    caption,
+                )
+                moves[key] = {
+                    "caption_location": association.caption_location,
+                    "caption_body_number": association.paragraph_index,
+                    "object_kind": "figure",
+                    "object_number": figure_block.paragraph_index,
+                    "before_position": before_position,
+                    "after_position": profile.figures.caption_position,
+                }
                 _property(paragraph, "pPr", "keepNext").set(f"{W}val", "1")
             else:
                 continue
@@ -147,33 +349,35 @@ def repair_objects(
                     ):
                         cell_border.getparent().remove(cell_border)
         elif rule_id == "TABLE.CAPTION.POSITION":
-            table_child_index = body_children.index(table)
-            paragraph_nodes = {
-                id(paragraph): semantic_by_location.get(
-                    f"paragraph:{paragraph_index}"
+            key = f"{rule_id}|{location}"
+            table_block = table_by_number.get(index + 1)
+            association = table_associations.get(id(table))
+            if association is None or table_block is None:
+                unrepaired[key] = (
+                    "ambiguous"
+                    if id(table) in ambiguous_tables
+                    else "missing"
                 )
-                for paragraph_index, paragraph in enumerate(paragraphs, start=1)
-            }
-            candidates = [
-                (abs(candidate_index - table_child_index), child)
-                for candidate_index, child in enumerate(body_children)
-                if etree.QName(child).localname == "p"
-                and (
-                    node := paragraph_nodes.get(id(child))
-                ) is not None
-                and node.role == "table_caption"
-            ]
-            if not candidates:
                 continue
-            caption = min(candidates, key=lambda item: item[0])[1]
+            caption = association.element
+            before_position = (
+                "above" if body.index(caption) < body.index(table) else "below"
+            )
             body.remove(caption)
             body.insert(
                 body.index(table)
                 + (1 if profile.tables.caption_position == "below" else 0),
                 caption,
             )
-            moves.append({"rule_id": rule_id, "caption": caption})
+            moves[key] = {
+                "caption_location": association.caption_location,
+                "caption_body_number": association.paragraph_index,
+                "object_kind": "table",
+                "object_number": index + 1,
+                "before_position": before_position,
+                "after_position": profile.tables.caption_position,
+            }
         else:
             continue
         repaired.add(f"{rule_id}|{location}")
-    return repaired, moves
+    return repaired, moves, unrepaired

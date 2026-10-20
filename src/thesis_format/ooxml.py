@@ -198,12 +198,13 @@ class OoxmlPackage:
         return package
 
     def xml(self, part_name: str) -> etree._Element:
+        if part_name in self._xml:
+            return self._xml[part_name]
         if part_name not in self.parts:
             raise OoxmlError(f"OOXML part {part_name!r} does not exist")
-        if part_name not in self._xml:
-            self._xml[part_name] = parse_xml(
-                self.parts[part_name], part_name=part_name
-            )
+        self._xml[part_name] = parse_xml(
+            self.parts[part_name], part_name=part_name
+        )
         return self._xml[part_name]
 
     def iter_part_names(self, prefix: str = "") -> tuple[str, ...]:
@@ -296,11 +297,6 @@ class OoxmlPackage:
         """Write a copy, replacing selected parts and preserving all others."""
 
         changed = dict(replacements or {})
-        unknown = sorted(changed.keys() - self.parts.keys())
-        if unknown:
-            raise OoxmlError(
-                "cannot replace nonexistent OOXML part(s): " + ", ".join(unknown)
-            )
         serialized: dict[str, bytes] = {}
         for name, value in changed.items():
             _validate_name(name)
@@ -323,6 +319,12 @@ class OoxmlPackage:
             with ZipFile(destination, "w", compression=ZIP_DEFLATED) as archive:
                 for name, data in self.parts.items():
                     archive.writestr(self._infos[name], serialized.get(name, data))
+                for name in sorted(changed.keys() - self.parts.keys()):
+                    info = ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                    info.compress_type = ZIP_DEFLATED
+                    info.create_system = 3
+                    info.external_attr = 0o600 << 16
+                    archive.writestr(info, serialized[name])
         except OSError as error:
             raise OoxmlError(f"cannot write OOXML package {destination}: {error}") from error
         return destination

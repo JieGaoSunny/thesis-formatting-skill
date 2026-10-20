@@ -86,10 +86,20 @@ def _caption_move_allowed(
             "FIGURE.CAPTION.POSITION": "image",
             "TABLE.CAPTION.POSITION": "table",
         }.get(rule_id)
-        relationship_sha256 = change.get("relationship_sha256")
-        if object_type is None or not isinstance(relationship_sha256, str):
+        before_binding = change.get("before")
+        binding_hash = (
+            before_binding.get("object_occurrence_sha256")
+            if isinstance(before_binding, Mapping)
+            else None
+        )
+        object_occurrence_sha256 = (
+            change.get("object_occurrence_sha256")
+            or binding_hash
+            or change.get("relationship_sha256")
+        )
+        if object_type is None or not isinstance(object_occurrence_sha256, str):
             continue
-        expected_identity = (object_type, relationship_sha256)
+        expected_identity = (object_type, object_occurrence_sha256)
         if (
             expected_identity
             in _adjacent_identities(before_body, before_index, object_type)

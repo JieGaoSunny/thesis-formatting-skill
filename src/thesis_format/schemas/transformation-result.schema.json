@@ -129,6 +129,7 @@
         "operation": {"type": "string", "minLength": 1},
         "node_id": {"type": "string", "minLength": 1},
         "relationship_sha256": {"$ref": "#/$defs/sha256"},
+        "object_occurrence_sha256": {"$ref": "#/$defs/sha256"},
         "before": {"$ref": "#/$defs/jsonValue"},
         "after": {"$ref": "#/$defs/jsonValue"},
         "status": {"enum": ["applied", "skipped", "failed"]}
@@ -140,15 +141,40 @@
             "required": ["operation"]
           },
           "then": {
-            "required": ["node_id", "relationship_sha256"],
+            "required": [
+              "node_id",
+              "object_occurrence_sha256",
+              "before",
+              "after"
+            ],
             "properties": {
               "rule_id": {
                 "enum": ["FIGURE.CAPTION.POSITION", "TABLE.CAPTION.POSITION"]
+              },
+              "before": {
+                "$ref": "#/$defs/captionBinding"
+              },
+              "after": {
+                "$ref": "#/$defs/captionBinding"
               }
             }
           }
         }
       ]
+    },
+    "captionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "object_occurrence_sha256",
+        "position"
+      ],
+      "properties": {
+        "node_id": {"type": "string", "minLength": 1},
+        "object_occurrence_sha256": {"$ref": "#/$defs/sha256"},
+        "position": {"enum": ["above", "below"]}
+      }
     },
     "contentComparison": {
       "type": "object",

@@ -96,78 +96,55 @@ def _change_digest(change: dict[str, object]) -> str:
 
 
 def _caption_binding(
-    finding: dict[str, object],
+    move: dict[str, object],
     before_snapshot: dict[str, object],
-    semantic,
 ) -> tuple[str, str] | None:
-    location = str(finding["location"])
-    if finding["rule_id"] == "FIGURE.CAPTION.POSITION":
-        object_type = "image"
-        paragraph = int(location.split(":")[1])
-        object_node = next(
-            (
-                node
-                for node in before_snapshot["body"]  # type: ignore[index]
-                if node["node_type"] == object_type
-                and f"/w:p[{paragraph}]/" in node["source_location"]["path"]
-            ),
-            None,
+    caption_paragraph = int(move["caption_body_number"])
+    captions = [
+        node
+        for node in before_snapshot["body"]  # type: ignore[index]
+        if node["node_type"] == "caption"
+        and re.search(
+            rf"/w:p\[{caption_paragraph}\](?:/|$)",
+            str(node["source_location"]["path"]),
         )
+    ]
+    if len(captions) != 1:
+        return None
+    if move["object_kind"] == "figure":
+        object_type = "image"
+        paragraph = int(move["object_number"])
+        objects = [
+            node
+            for node in before_snapshot["body"]  # type: ignore[index]
+            if node["node_type"] == object_type
+            and re.search(
+                rf"/w:p\[{paragraph}\](?:/|$)",
+                str(node["source_location"]["path"]),
+            )
+        ]
     else:
         object_type = "table"
-        table_number = int(location.split(":")[1])
+        table_number = int(move["object_number"])
         table_nodes = [
             node
             for node in before_snapshot["body"]  # type: ignore[index]
             if node["node_type"] == object_type
         ]
-        identities: list[str] = []
+        distinct_tables: list[dict[str, object]] = []
+        seen_hashes: set[str] = set()
         for node in table_nodes:
-            identity = str(node.get("relationship_hash") or "")
-            if identity and identity not in identities:
-                identities.append(identity)
-        if not 0 < table_number <= len(identities):
-            return None
-        identity = identities[table_number - 1]
-        object_node = next(
-            node
-            for node in table_nodes
-            if node.get("relationship_hash") == identity
-        )
-    if object_node is None:
+            occurrence_hash = str(node.get("relationship_hash") or "")
+            if occurrence_hash and occurrence_hash not in seen_hashes:
+                seen_hashes.add(occurrence_hash)
+                distinct_tables.append(node)
+        objects = distinct_tables[table_number - 1 : table_number]
+    if len(objects) != 1:
         return None
-    relationship = object_node.get("relationship_hash")
-    object_indexes = [
-        index
-        for index, node in enumerate(before_snapshot["body"])  # type: ignore[arg-type,index]
-        if node["node_type"] == object_type
-        and node.get("relationship_hash") == relationship
-    ]
-    expected_role = (
-        "figure_caption"
-        if finding["rule_id"] == "FIGURE.CAPTION.POSITION"
-        else "table_caption"
-    )
-    caption_titles = {
-        re.sub(r"^[图表]\s*\d+[.-]\d+\s*", "", node.raw_text).strip()
-        for node in semantic.paragraphs
-        if node.role == expected_role
-    }
-    captions = [
-        (min(abs(index - object_index) for object_index in object_indexes), node)
-        for index, node in enumerate(before_snapshot["body"])  # type: ignore[arg-type,index]
-        if node["node_type"] == "caption"
-        and any(
-            str(node["normalized_text"]).endswith(title)
-            for title in caption_titles
-        )
-    ]
-    if not captions:
+    occurrence_hash = objects[0].get("relationship_hash")
+    if not occurrence_hash:
         return None
-    caption = min(captions, key=lambda item: item[0])[1]
-    if not relationship:
-        return None
-    return str(caption["node_id"]), str(relationship)
+    return str(captions[0]["node_id"]), str(occurrence_hash)
 
 
 def _reference_format(
@@ -235,7 +212,7 @@ def _allow_bound_table_caption_move(
         ):
             continue
         allowed_ids.add(str(change["node_id"]))
-        relationship = str(change["relationship_sha256"])
+        relationship = str(change["object_occurrence_sha256"])
         for snapshot in (before_snapshot, after_snapshot):
             allowed_ids.update(
                 str(node["node_id"])
@@ -253,6 +230,71 @@ def _allow_bound_table_caption_move(
         if not (
             difference["kind"] == "reordered"
             and difference["node_id"] in allowed_ids
+        )
+    ]
+    comparison["equivalent"] = not comparison["differences"]
+
+
+def _allow_verified_header_footer_repairs(
+    comparison: dict[str, object],
+    changes: list[dict[str, object]],
+) -> None:
+    allowed: set[tuple[int, str]] = set()
+    for change in changes:
+        if (
+            change["status"] != "applied"
+            or not str(change["location"]).startswith("section:")
+        ):
+            continue
+        section = int(str(change["location"]).split(":")[1])
+        rule_id = str(change["rule_id"])
+        if rule_id in {
+            "HEADER.FOOTER.HEADER_REQUIRED",
+            "HEADER.FOOTER.HEADER_SOURCE",
+        }:
+            allowed.add((section, "header"))
+        elif rule_id in {
+            "HEADER.FOOTER.FOOTER_REQUIRED",
+            "HEADER.FOOTER.PAGE_NUMBER",
+            "HEADER.FOOTER.PAGE_ALIGNMENT",
+        }:
+            allowed.add((section, "footer"))
+        elif rule_id == "HEADER.FOOTER.LINKING":
+            for kind in change["before"]:
+                if kind in {"header", "footer"}:
+                    allowed.add((section, str(kind)))
+    if not allowed:
+        return
+    differences = comparison["differences"]
+    assert isinstance(differences, list)
+
+    def story_part(value: object) -> tuple[int, str] | None:
+        if not isinstance(value, dict):
+            return None
+        location = value.get("source_location")
+        if not isinstance(location, dict):
+            return None
+        part = str(location.get("part") or "")
+        kind = (
+            "header"
+            if part.startswith("word/header")
+            else "footer"
+            if part.startswith("word/footer")
+            else None
+        )
+        match = re.match(r"^/section\[(\d+)\]/", str(location.get("path") or ""))
+        return (
+            (int(match.group(1)), kind)
+            if match is not None and kind is not None
+            else None
+        )
+
+    comparison["differences"] = [
+        difference
+        for difference in differences
+        if not (
+            story_part(difference.get("before")) in allowed
+            or story_part(difference.get("after")) in allowed
         )
     ]
     comparison["equivalent"] = not comparison["differences"]
@@ -305,7 +347,7 @@ def format_document(
         profile,
         findings,
     )
-    object_repairs, _ = repair_objects(
+    object_repairs, caption_moves, caption_unrepaired = repair_objects(
         document, semantic, profile, findings
     )
     repaired |= object_repairs
@@ -341,14 +383,50 @@ def format_document(
             "status": status,
         }
         if change["operation"] == "move_caption" and status == "applied":
-            binding = _caption_binding(finding, before_snapshot, semantic)
+            move = caption_moves.get(key)
+            binding = (
+                _caption_binding(move, before_snapshot)
+                if move is not None
+                else None
+            )
             if binding is None:
-                change["status"] = "skipped"
+                change["status"] = "failed"
                 change["after"] = None
-                change["operation"] = "preserve-unbound-caption"
+                change["operation"] = "failed-unbound-caption-move"
             else:
-                change["node_id"], change["relationship_sha256"] = binding
+                node_id, occurrence_hash = binding
+                change["node_id"] = node_id
+                change["object_occurrence_sha256"] = occurrence_hash
+                change["before"] = {
+                    "node_id": node_id,
+                    "object_occurrence_sha256": occurrence_hash,
+                    "position": move["before_position"],
+                }
+                change["after"] = {
+                    "node_id": node_id,
+                    "object_occurrence_sha256": occurrence_hash,
+                    "position": move["after_position"],
+                }
+        elif change["operation"] == "move_caption":
+            reason = caption_unrepaired.get(key, "missing")
+            change["operation"] = (
+                "preserve-ambiguous-caption-association"
+                if reason == "ambiguous"
+                else "preserve-missing-caption-association"
+            )
         changes.append(change)
+
+    outstanding = {
+        f"{finding['rule_id']}|{finding['location']}"
+        for finding in post_audit["findings"]
+    }
+    for change in changes:
+        key = f"{change['rule_id']}|{change['location']}"
+        if change["status"] == "applied" and key in outstanding:
+            change["status"] = "failed"
+            change["after"] = None
+            if change["operation"] == "move_caption":
+                change["operation"] = "failed-caption-move-postcondition"
 
     digests = [_change_digest(change) for change in changes]
     if len(digests) != len(set(digests)):
@@ -373,6 +451,7 @@ def format_document(
         after_snapshot,
         changes,
     )
+    _allow_verified_header_footer_repairs(comparison, changes)
     report: dict[str, object] = {
         "schema_version": "1.0",
         "source_path": str(source),
