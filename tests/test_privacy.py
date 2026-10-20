@@ -4,6 +4,7 @@ import json
 import os
 import stat
 import zipfile
+from io import BytesIO
 from pathlib import Path
 
 import fitz
@@ -15,6 +16,7 @@ from pikepdf.models.metadata import PdfMetadata
 
 from thesis_format import cli
 from thesis_format.contracts import validate_privacy_report
+from thesis_format import privacy
 from thesis_format.privacy import release_check, render_privacy_markdown
 
 
@@ -23,13 +25,38 @@ PROFILE = ROOT / "rules" / "apple-university.yaml"
 DENYLIST = ROOT / "tests" / "fixtures" / "privacy" / "synthetic-denylist.txt"
 
 
-def _write_docx(path: Path, parts: dict[str, str], media: tuple[str, ...] = ()) -> None:
+def _write_docx(
+    path: Path,
+    parts: dict[str, str | bytes],
+    media: tuple[str, ...] = (),
+) -> None:
     with zipfile.ZipFile(path, "w") as package:
         package.writestr("[Content_Types].xml", "<Types/>")
         for name, content in parts.items():
             package.writestr(name, content)
         for name in media:
             package.writestr(name, b"image")
+
+
+def _docx_bytes(parts: dict[str, str | bytes]) -> bytes:
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", "<Types/>")
+        for name, content in parts.items():
+            package.writestr(name, content)
+    return output.getvalue()
+
+
+def _image_bytes(
+    image_format: str,
+    *,
+    exif: Image.Exif | None = None,
+    pnginfo: PngImagePlugin.PngInfo | None = None,
+) -> bytes:
+    output = BytesIO()
+    image = Image.new("RGB", (2, 2), "white")
+    image.save(output, format=image_format, exif=exif, pnginfo=pnginfo)
+    return output.getvalue()
 
 
 def _rules(report: dict[str, object]) -> list[str]:
@@ -475,6 +502,231 @@ def test_clean_png_is_scanned_without_findings(tmp_path: Path) -> None:
     assert report["findings"] == []
     assert report["scanned_files"] == ["figure.png"]
     assert report["skipped_files"] == []
+
+
+def test_scans_embedded_jpeg_exif_and_accepts_clean_png(tmp_path: Path) -> None:
+    document = tmp_path / "thesis.docx"
+    exif = Image.Exif()
+    exif[315] = "private@example.test"
+    clean_metadata = PngImagePlugin.PngInfo()
+    clean_metadata.add_text("Description", "Public thesis figure")
+    _write_docx(
+        document,
+        {
+            "word/media/private.jpg": _image_bytes("JPEG", exif=exif),
+            "word/media/public.png": _image_bytes("PNG", pnginfo=clean_metadata),
+        },
+    )
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    email_findings = [
+        finding
+        for finding in report["findings"]  # type: ignore[index]
+        if finding["rule_id"] == "PRIVACY.EMAIL"
+    ]
+    assert len(email_findings) == 1
+    assert email_findings[0]["location"] == (
+        "part:word/media/private.jpg:metadata:artist"
+    )
+    assert "PRIVACY.UNSUPPORTED" not in _rules(report)
+
+
+def test_scans_embedded_svg_text_and_recursive_docx_pdf(
+    tmp_path: Path,
+) -> None:
+    pdf_output = BytesIO()
+    pdf = fitz.open()
+    page = pdf.new_page()
+    page.insert_text((72, 72), "private@example.test")
+    pdf.save(pdf_output)
+    pdf.close()
+    nested = _docx_bytes(
+        {
+            "word/document.xml": (
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/'
+                'wordprocessingml/2006/main"><w:body><w:p><w:r>'
+                "<w:t>Secret Student</w:t></w:r></w:p></w:body></w:document>"
+            ),
+            "word/embeddings/private.pdf": pdf_output.getvalue(),
+        }
+    )
+    document = tmp_path / "thesis.docx"
+    _write_docx(
+        document,
+        {
+            "word/media/figure.svg": (
+                '<svg xmlns="http://www.w3.org/2000/svg">'
+                "<text>private@example.test</text></svg>"
+            ),
+            "word/embeddings/notes.txt": "private@example.test",
+            "word/embeddings/nested.docx": nested,
+        },
+    )
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    locations = {finding["location"] for finding in report["findings"]}  # type: ignore[index]
+    assert "part:word/media/figure.svg:svg:text" in locations
+    assert "part:word/embeddings/notes.txt:line:1" in locations
+    assert (
+        "part:word/embeddings/nested.docx:"
+        "part:word/embeddings/private.pdf:page:1"
+    ) in locations
+    assert "PRIVACY.DENYLIST" in _rules(report)
+
+
+@pytest.mark.parametrize(
+    ("name", "payload"),
+    [
+        ("word/embeddings/object.bin", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1opaque"),
+        ("word/embeddings/workbook.xlsx", b"PK\x03\x04opaque"),
+        ("word/embeddings/archive.zip", b"PK\x03\x04opaque"),
+        ("customXml/unknown.bin", b"\x00opaque\xff"),
+    ],
+)
+def test_embedded_unsupported_binary_formats_fail_closed(
+    tmp_path: Path,
+    name: str,
+    payload: bytes,
+) -> None:
+    document = tmp_path / "thesis.docx"
+    _write_docx(document, {name: payload})
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    unsupported = [
+        finding
+        for finding in report["findings"]  # type: ignore[index]
+        if finding["rule_id"] == "PRIVACY.UNSUPPORTED"
+    ]
+    assert len(unsupported) == 1
+    assert unsupported[0]["location"] == f"part:{name}"
+
+
+def test_embedded_encrypted_zip_member_fails_closed(tmp_path: Path) -> None:
+    document = tmp_path / "thesis.docx"
+    _write_docx(document, {"word/document.xml": "<document/>"})
+    raw = bytearray(document.read_bytes())
+    marker = raw.find(b"word/document.xml")
+    assert marker > 0
+    local_header = raw.rfind(b"PK\x03\x04", 0, marker)
+    central_header = raw.find(b"PK\x01\x02", marker)
+    assert local_header >= 0 and central_header >= 0
+    raw[local_header + 6 : local_header + 8] = (1).to_bytes(2, "little")
+    raw[central_header + 8 : central_header + 10] = (1).to_bytes(2, "little")
+    document.write_bytes(raw)
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    encrypted = [
+        finding
+        for finding in report["findings"]  # type: ignore[index]
+        if finding["rule_id"] == "PRIVACY.ENCRYPTED"
+    ]
+    assert len(encrypted) == 1
+    assert str(encrypted[0]["location"]).startswith("part:")
+
+
+def test_embedded_encrypted_pdf_fails_closed(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "encrypted.pdf"
+    pdf = pikepdf.Pdf.new()
+    pdf.add_blank_page()
+    pdf.save(
+        pdf_path,
+        encryption=pikepdf.Encryption(owner="owner-secret", user="user-secret"),
+    )
+    document = tmp_path / "thesis.docx"
+    _write_docx(
+        document,
+        {"word/embeddings/encrypted.pdf": pdf_path.read_bytes()},
+    )
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    encrypted = [
+        finding
+        for finding in report["findings"]  # type: ignore[index]
+        if finding["rule_id"] == "PRIVACY.ENCRYPTED"
+    ]
+    assert len(encrypted) == 1
+    assert encrypted[0]["location"] == "part:word/embeddings/encrypted.pdf"
+
+
+def test_embedded_part_and_zip_bomb_limits_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(privacy, "_MAX_EMBEDDED_BYTES", 32)
+    monkeypatch.setattr(privacy, "_MAX_ZIP_MEMBERS", 2)
+    monkeypatch.setattr(privacy, "_MAX_ZIP_UNCOMPRESSED_BYTES", 64)
+    document = tmp_path / "thesis.docx"
+    _write_docx(
+        document,
+        {
+            "word/media/large.png": b"x" * 33,
+            "word/document.xml": "<document/>",
+            "word/header1.xml": "<header/>",
+        },
+    )
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    oversize_locations = {
+        finding["location"]
+        for finding in report["findings"]  # type: ignore[index]
+        if finding["rule_id"] == "PRIVACY.OVERSIZE"
+    }
+    assert "package" in oversize_locations
+    assert "part:word/media/large.png" in oversize_locations
+
+
+def test_high_compression_zip_bomb_fails_closed(tmp_path: Path) -> None:
+    document = tmp_path / "thesis.docx"
+    with zipfile.ZipFile(
+        document,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=9,
+    ) as package:
+        package.writestr("[Content_Types].xml", "<Types/>")
+        package.writestr("word/document.xml", "0" * 1_000_000)
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    oversize = [
+        finding
+        for finding in report["findings"]  # type: ignore[index]
+        if finding["rule_id"] == "PRIVACY.OVERSIZE"
+    ]
+    assert len(oversize) == 1
+    assert oversize[0]["location"] == "package"
+
+
+def test_recursive_docx_depth_limit_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(privacy, "_MAX_EMBEDDED_DEPTH", 0)
+    document = tmp_path / "thesis.docx"
+    _write_docx(
+        document,
+        {
+            "word/embeddings/nested.docx": _docx_bytes(
+                {"word/document.xml": "<document/>"}
+            )
+        },
+    )
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    depth_findings = [
+        finding
+        for finding in report["findings"]  # type: ignore[index]
+        if finding["rule_id"] == "PRIVACY.OVERSIZE"
+    ]
+    assert len(depth_findings) == 1
+    assert depth_findings[0]["location"] == "part:word/embeddings/nested.docx"
 
 
 def test_extensionless_utf8_text_is_supported(tmp_path: Path) -> None:

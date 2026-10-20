@@ -9,6 +9,7 @@ import unicodedata
 import zipfile
 from collections import Counter
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Sequence
 
@@ -52,6 +53,23 @@ _TEXT_SUFFIXES = {
     ".yml",
 }
 _IMAGE_SUFFIXES = {".jpeg", ".jpg", ".png"}
+_ARCHIVE_SUFFIXES = {
+    ".7z",
+    ".bz2",
+    ".gz",
+    ".rar",
+    ".tar",
+    ".tgz",
+    ".xz",
+    ".zip",
+}
+_WORKBOOK_SUFFIXES = {".xls", ".xlsb", ".xlsm", ".xlsx"}
+_OLE_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+_MAX_EMBEDDED_BYTES = 32 * 1024 * 1024
+_MAX_ZIP_MEMBERS = 4096
+_MAX_ZIP_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+_MAX_ZIP_COMPRESSION_RATIO = 100
+_MAX_EMBEDDED_DEPTH = 3
 _UTF16LE_EXIF_TAGS = {
     "XPAuthor",
     "XPComment",
@@ -373,13 +391,36 @@ class _Scanner:
             "An in-scope file could not be scanned.",
         )
 
-    def unsupported(self, display_path: str) -> None:
+    def unsupported(
+        self,
+        display_path: str,
+        location: str = "file",
+        matched: str | None = None,
+    ) -> None:
         self.add(
             "PRIVACY.UNSUPPORTED",
             display_path,
-            "file",
-            PurePosixPath(display_path).suffix or display_path,
+            location,
+            matched or PurePosixPath(display_path).suffix or display_path,
             "An in-scope file uses an unsupported format.",
+        )
+
+    def encrypted(self, display_path: str, location: str, matched: str) -> None:
+        self.add(
+            "PRIVACY.ENCRYPTED",
+            display_path,
+            location,
+            matched,
+            "An encrypted in-scope payload could not be scanned.",
+        )
+
+    def oversize(self, display_path: str, location: str, matched: str) -> None:
+        self.add(
+            "PRIVACY.OVERSIZE",
+            display_path,
+            location,
+            matched,
+            "An in-scope payload exceeded a safe scanning limit.",
         )
 
     def scan_regular_file(self, path: Path, display_path: str) -> None:
@@ -417,56 +458,198 @@ class _Scanner:
     def scan_docx(self, path: Path, display_path: str) -> None:
         try:
             with zipfile.ZipFile(path) as package:
-                for name in sorted(package.namelist()):
-                    safe_name = self.redact_path(name)
-                    self.scan_text(
-                        name,
-                        display_path,
-                        f"part:{safe_name}",
-                        scan_placeholders=False,
-                    )
-                    if not (
-                        name.endswith(".xml")
-                        or name.endswith(".rels")
-                        or name == "[Content_Types].xml"
-                    ):
-                        continue
-                    try:
-                        raw = package.read(name)
-                        root = etree.fromstring(
-                            raw,
-                            parser=etree.XMLParser(
-                                resolve_entities=False,
-                                no_network=True,
-                            ),
-                        )
-                    except (
-                        KeyError,
-                        OSError,
-                        RuntimeError,
-                        etree.XMLSyntaxError,
-                    ):
-                        self.add(
-                            "PRIVACY.UNREADABLE",
-                            display_path,
-                            f"part:{safe_name}",
-                            safe_name,
-                            "An in-scope document part could not be scanned.",
-                        )
-                        continue
-                    self.scan_ooxml_text(root, display_path, safe_name)
-                    self.scan_xml_attributes(root, display_path, f"part:{safe_name}")
-                    self.scan_ooxml_metadata(root, display_path, safe_name)
+                self.scan_docx_package(package, display_path, depth=0)
         except (OSError, zipfile.BadZipFile):
             self.unreadable(path, display_path, "package")
+
+    def scan_docx_package(
+        self,
+        package: zipfile.ZipFile,
+        display_path: str,
+        *,
+        depth: int,
+        location_prefix: str = "",
+    ) -> None:
+        infos = sorted(package.infolist(), key=lambda info: info.filename)
+        package_location = location_prefix or "package"
+        oversized_parts = [
+            info
+            for info in infos
+            if not info.is_dir() and info.file_size > _MAX_EMBEDDED_BYTES
+        ]
+        for info in oversized_parts:
+            safe_name = self.redact_path(info.filename)
+            self.oversize(
+                display_path,
+                self._part_location(location_prefix, safe_name),
+                safe_name,
+            )
+        total_size = sum(info.file_size for info in infos if not info.is_dir())
+        excessive_ratio = any(
+            info.file_size > 0
+            and (
+                info.compress_size == 0
+                or info.file_size / info.compress_size > _MAX_ZIP_COMPRESSION_RATIO
+            )
+            for info in infos
+            if not info.is_dir()
+        )
+        if (
+            len(infos) > _MAX_ZIP_MEMBERS
+            or total_size > _MAX_ZIP_UNCOMPRESSED_BYTES
+            or excessive_ratio
+        ):
+            self.oversize(display_path, package_location, "zip-package")
+            return
+
+        for info in infos:
+            if info.is_dir():
+                continue
+            name = info.filename
+            safe_name = self.redact_path(name)
+            location = self._part_location(location_prefix, safe_name)
+            self.scan_text(
+                name,
+                display_path,
+                location,
+                scan_placeholders=False,
+            )
+            if info.flag_bits & 0x1:
+                self.encrypted(display_path, location, safe_name)
+                continue
+            if info.file_size > _MAX_EMBEDDED_BYTES:
+                continue
+            try:
+                raw = package.read(info)
+            except (KeyError, OSError, RuntimeError, zipfile.BadZipFile):
+                self.add(
+                    "PRIVACY.UNREADABLE",
+                    display_path,
+                    location,
+                    safe_name,
+                    "An in-scope document part could not be scanned.",
+                )
+                continue
+            if (
+                name.endswith(".xml")
+                or name.endswith(".rels")
+                or name == "[Content_Types].xml"
+            ):
+                self.scan_ooxml_bytes(raw, display_path, safe_name, location)
+            else:
+                self.scan_embedded_bytes(
+                    raw,
+                    display_path,
+                    safe_name,
+                    location,
+                    depth=depth,
+                )
+
+    @staticmethod
+    def _part_location(prefix: str, name: str) -> str:
+        part = f"part:{name}"
+        return f"{prefix}:{part}" if prefix else part
+
+    def scan_ooxml_bytes(
+        self,
+        raw: bytes,
+        display_path: str,
+        part_name: str,
+        location: str,
+    ) -> None:
+        try:
+            root = etree.fromstring(
+                raw,
+                parser=etree.XMLParser(resolve_entities=False, no_network=True),
+            )
+        except etree.XMLSyntaxError:
+            self.add(
+                "PRIVACY.UNREADABLE",
+                display_path,
+                location,
+                part_name,
+                "An in-scope document part could not be scanned.",
+            )
+            return
+        self.scan_ooxml_text(root, display_path, part_name, location=location)
+        self.scan_xml_attributes(root, display_path, location)
+        self.scan_ooxml_metadata(root, display_path, part_name, location=location)
+
+    def scan_embedded_bytes(
+        self,
+        raw: bytes,
+        display_path: str,
+        part_name: str,
+        location: str,
+        *,
+        depth: int,
+    ) -> None:
+        if len(raw) > _MAX_EMBEDDED_BYTES:
+            self.oversize(display_path, location, part_name)
+            return
+        suffix = PurePosixPath(part_name).suffix.casefold()
+        if raw.startswith(_OLE_SIGNATURE):
+            self.unsupported(display_path, location, suffix or "ole")
+        elif suffix in _WORKBOOK_SUFFIXES:
+            self.unsupported(display_path, location, suffix)
+        elif suffix in _ARCHIVE_SUFFIXES:
+            self.unsupported(display_path, location, suffix)
+        elif suffix == ".docx":
+            if depth >= _MAX_EMBEDDED_DEPTH:
+                self.oversize(display_path, location, "embedded-depth")
+                return
+            try:
+                with zipfile.ZipFile(BytesIO(raw)) as package:
+                    self.scan_docx_package(
+                        package,
+                        display_path,
+                        depth=depth + 1,
+                        location_prefix=location,
+                    )
+            except (OSError, zipfile.BadZipFile):
+                self.add(
+                    "PRIVACY.UNREADABLE",
+                    display_path,
+                    location,
+                    part_name,
+                    "An embedded document could not be scanned.",
+                )
+        elif suffix == ".pdf" or raw.startswith(b"%PDF-"):
+            self.scan_pdf_bytes(raw, display_path, location)
+        elif suffix == ".svg":
+            self.scan_svg_bytes(raw, display_path, f"{location}:svg")
+        elif suffix in _IMAGE_SUFFIXES:
+            self.scan_image_bytes(raw, display_path, location)
+        elif suffix in _TEXT_SUFFIXES:
+            try:
+                text = raw.decode("utf-8", errors="strict")
+            except UnicodeError:
+                self.add(
+                    "PRIVACY.UNREADABLE",
+                    display_path,
+                    location,
+                    part_name,
+                    "An embedded text payload could not be scanned.",
+                )
+            else:
+                for line_number, line in enumerate(text.splitlines(), 1):
+                    self.scan_text(
+                        line,
+                        display_path,
+                        f"{location}:line:{line_number}",
+                    )
+        else:
+            self.unsupported(display_path, location, suffix or "binary")
 
     def scan_ooxml_text(
         self,
         root: etree._Element,
         path: str,
         part_name: str,
+        *,
+        location: str | None = None,
     ) -> None:
-        location = f"part:{part_name}"
+        location = location or f"part:{part_name}"
         namespaces = {"w": _WORDPROCESSINGML_NAMESPACE}
         paragraphs = root.xpath(".//w:p", namespaces=namespaces)
         if paragraphs:
@@ -519,6 +702,8 @@ class _Scanner:
         root: etree._Element,
         path: str,
         part_name: str,
+        *,
+        location: str | None = None,
     ) -> None:
         properties: list[tuple[str, str]] = []
         if part_name == "docProps/core.xml":
@@ -559,12 +744,16 @@ class _Scanner:
             if not value:
                 continue
             lowered = name.casefold()
-            location = f"part:{part_name}:metadata:{name}"
+            metadata_location = (
+                f"{location}:metadata:{name}"
+                if location
+                else f"part:{part_name}:metadata:{name}"
+            )
             if lowered in forbidden:
                 self.add(
                     "PRIVACY.METADATA",
                     path,
-                    location,
+                    metadata_location,
                     value,
                     "Forbidden document metadata was found and redacted.",
                 )
@@ -576,30 +765,66 @@ class _Scanner:
                 self.add(
                     f"PRIVACY.IDENTITY.{identity.upper()}",
                     path,
-                    location,
+                    metadata_location,
                     value,
                     "A non-fictional identity value was found.",
                 )
 
     def scan_svg(self, path: Path, display_path: str) -> None:
         try:
-            root = etree.parse(
-                str(path),
-                parser=etree.XMLParser(resolve_entities=False, no_network=True),
-            ).getroot()
-        except (OSError, etree.XMLSyntaxError):
+            raw = path.read_bytes()
+        except OSError:
             self.unreadable(path, display_path, "svg")
+            return
+        self.scan_svg_bytes(raw, display_path, "svg")
+
+    def scan_svg_bytes(
+        self,
+        raw: bytes,
+        display_path: str,
+        location: str,
+    ) -> None:
+        try:
+            root = etree.fromstring(
+                raw,
+                parser=etree.XMLParser(resolve_entities=False, no_network=True),
+            )
+        except etree.XMLSyntaxError:
+            self.add(
+                "PRIVACY.UNREADABLE",
+                display_path,
+                location,
+                location,
+                "An in-scope SVG payload could not be scanned.",
+            )
             return
         text = "".join(root.itertext())
         if text:
-            self.scan_text(text, display_path, "svg:text")
-        self.scan_xml_attributes(root, display_path, "svg:attribute")
+            self.scan_text(text, display_path, f"{location}:text")
+        self.scan_xml_attributes(root, display_path, f"{location}:attribute")
 
     def scan_image(self, path: Path, display_path: str) -> None:
         try:
-            with Image.open(path) as image:
+            raw = path.read_bytes()
+        except OSError:
+            self.unreadable(path, display_path, "image")
+            return
+        self.scan_image_bytes(raw, display_path, "")
+
+    def scan_image_bytes(
+        self,
+        raw: bytes,
+        display_path: str,
+        location: str,
+    ) -> None:
+        try:
+            with Image.open(BytesIO(raw)) as image:
                 image.load()
-                metadata = list(image.info.items())
+                metadata = [
+                    (key, value)
+                    for key, value in image.info.items()
+                    if str(key).casefold() != "exif"
+                ]
                 metadata.extend(
                     (
                         ExifTags.TAGS.get(tag, str(tag)),
@@ -607,24 +832,93 @@ class _Scanner:
                     )
                     for tag, value in image.getexif().items()
                 )
-            for key, value in metadata:
-                if isinstance(value, bytes):
-                    encoding = (
-                        "utf-16le"
-                        if str(key) in _UTF16LE_EXIF_TAGS
-                        else "utf-8"
-                    )
-                    rendered = value.decode(encoding, errors="ignore").rstrip("\0")
-                else:
-                    rendered = str(value)
-                if rendered:
-                    self.scan_text(
-                        rendered,
-                        display_path,
-                        f"metadata:{str(key).casefold()}",
-                    )
         except (OSError, UnidentifiedImageError, ValueError):
-            self.unreadable(path, display_path, "image")
+            self.add(
+                "PRIVACY.UNREADABLE",
+                display_path,
+                location or "image",
+                location or display_path,
+                "An in-scope image payload could not be scanned.",
+            )
+            return
+        for key, value in metadata:
+            if isinstance(value, bytes):
+                encoding = (
+                    "utf-16le"
+                    if str(key) in _UTF16LE_EXIF_TAGS
+                    else "utf-8"
+                )
+                rendered = value.decode(encoding, errors="ignore").rstrip("\0")
+            else:
+                rendered = str(value)
+            if rendered:
+                metadata_location = f"metadata:{str(key).casefold()}"
+                if location:
+                    metadata_location = f"{location}:{metadata_location}"
+                self.scan_text(rendered, display_path, metadata_location)
+
+    def scan_pdf_bytes(
+        self,
+        raw: bytes,
+        display_path: str,
+        location: str,
+    ) -> None:
+        try:
+            metadata: list[tuple[str, str]] = []
+            with pymupdf.open(stream=raw, filetype="pdf") as document:
+                metadata.extend(
+                    (key, rendered)
+                    for key, value in (document.metadata or {}).items()
+                    for rendered in _pdf_metadata_values(value)
+                )
+                if document.needs_pass:
+                    self.encrypted(display_path, location, "pdf")
+                    return
+                for page_number, page in enumerate(document, 1):
+                    self.scan_text(
+                        page.get_text(),
+                        display_path,
+                        f"{location}:page:{page_number}",
+                    )
+            with pikepdf.open(BytesIO(raw)) as pdf:
+                if "/Metadata" in pdf.Root:
+                    raw_xmp = pdf.Root.Metadata.read_bytes()
+                    xmp_root = etree.fromstring(
+                        raw_xmp,
+                        parser=etree.XMLParser(resolve_entities=False, no_network=True),
+                    )
+                    if xmp_root.find(
+                        ".//{http://www.w3.org/1999/02/22-rdf-syntax-ns#}RDF"
+                    ) is None:
+                        raise ValueError("PDF metadata stream is not valid XMP")
+                with pdf.open_metadata(update_docinfo=False) as xmp:
+                    metadata.extend(
+                        (str(key), rendered)
+                        for key, value in xmp.items()
+                        for rendered in _pdf_metadata_values(value)
+                    )
+                for key, value in pdf.docinfo.items():
+                    metadata.extend(
+                        (str(key), rendered)
+                        for rendered in _pdf_metadata_values(value)
+                    )
+            self.scan_pdf_metadata(metadata, display_path, location)
+        except pikepdf.PasswordError:
+            self.encrypted(display_path, location, "pdf")
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            etree.XMLSyntaxError,
+            pikepdf.PdfError,
+        ):
+            self.add(
+                "PRIVACY.UNREADABLE",
+                display_path,
+                location,
+                "pdf",
+                "An embedded PDF could not be scanned.",
+            )
 
     def scan_pdf(self, path: Path, display_path: str) -> None:
         try:
@@ -661,36 +955,7 @@ class _Scanner:
                         (str(key), rendered)
                         for rendered in _pdf_metadata_values(value)
                     )
-            forbidden = frozenset(
-                form
-                for key in self.profile.privacy.forbidden_metadata_keys
-                for form in _pdf_metadata_key_forms(key)
-            )
-            for key, value in sorted(metadata):
-                normalized_key = _pdf_metadata_key_name(key)
-                location = f"metadata:{normalized_key}"
-                self.scan_text(value, display_path, location)
-                if _pdf_metadata_key_forms(key) & forbidden:
-                    self.add(
-                        "PRIVACY.METADATA",
-                        display_path,
-                        location,
-                        value,
-                        "Forbidden document metadata was found and redacted.",
-                    )
-                    continue
-                if normalized_key in {"author", "creator"} and _normalized(
-                    value
-                ) != _normalized(
-                    self.profile.privacy.fictional_values.author
-                ):
-                    self.add(
-                        "PRIVACY.IDENTITY.AUTHOR",
-                        display_path,
-                        location,
-                        value,
-                        "A non-fictional identity value was found.",
-                    )
+            self.scan_pdf_metadata(metadata, display_path)
         except (
             OSError,
             RuntimeError,
@@ -699,6 +964,45 @@ class _Scanner:
             pikepdf.PdfError,
         ):
             self.unreadable(path, display_path, "pdf")
+
+    def scan_pdf_metadata(
+        self,
+        metadata: Sequence[tuple[str, str]],
+        display_path: str,
+        location_prefix: str = "",
+    ) -> None:
+        forbidden = frozenset(
+            form
+            for key in self.profile.privacy.forbidden_metadata_keys
+            for form in _pdf_metadata_key_forms(key)
+        )
+        for key, value in sorted(metadata):
+            normalized_key = _pdf_metadata_key_name(key)
+            location = f"metadata:{normalized_key}"
+            if location_prefix:
+                location = f"{location_prefix}:{location}"
+            self.scan_text(value, display_path, location)
+            if _pdf_metadata_key_forms(key) & forbidden:
+                self.add(
+                    "PRIVACY.METADATA",
+                    display_path,
+                    location,
+                    value,
+                    "Forbidden document metadata was found and redacted.",
+                )
+                continue
+            if normalized_key in {"author", "creator"} and _normalized(
+                value
+            ) != _normalized(
+                self.profile.privacy.fictional_values.author
+            ):
+                self.add(
+                    "PRIVACY.IDENTITY.AUTHOR",
+                    display_path,
+                    location,
+                    value,
+                    "A non-fictional identity value was found.",
+                )
 
     def scan(self) -> None:
         paths: Iterable[Path]
