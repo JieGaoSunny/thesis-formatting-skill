@@ -86,6 +86,20 @@ _FILENAME_IDENTITY = re.compile(
     r"(?i)^(author|student[ _-]*id|company|adviser|advisor|institution)"
     r"[ _-]+(.+?)(?:\.[^.]+)?$"
 )
+_CORE_PROPERTY_NAMESPACES = {
+    "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
+    "http://purl.org/dc/elements/1.1/",
+}
+_APP_PROPERTY_NAMESPACE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+)
+_CUSTOM_PROPERTY_NAMESPACE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
+)
+_PERMITTED_IDENTITY_METADATA = {
+    "creator": "author",
+    "lastmodifiedby": "author",
+}
 
 
 @dataclass(frozen=True)
@@ -199,7 +213,7 @@ class _Scanner:
         return "/".join(self._redact_segment(part) for part in normalized.split("/"))
 
     def display_path(self, path: Path) -> str:
-        if self.root.is_dir():
+        if not self.root.is_symlink() and self.root.is_dir():
             try:
                 relative = path.relative_to(self.root).as_posix()
             except ValueError:
@@ -372,29 +386,63 @@ class _Scanner:
             root = etree.fromstring(raw)
         except etree.XMLSyntaxError:
             return
+        properties: list[tuple[str, str]] = []
+        if part_name == "docProps/core.xml":
+            for element in root.iter():
+                if not isinstance(element.tag, str):
+                    continue
+                tag = etree.QName(element)
+                if tag.namespace in _CORE_PROPERTY_NAMESPACES:
+                    properties.append((tag.localname, "".join(element.itertext()).strip()))
+        elif part_name == "docProps/app.xml":
+            for element in root.iter():
+                if not isinstance(element.tag, str):
+                    continue
+                tag = etree.QName(element)
+                if tag.namespace == _APP_PROPERTY_NAMESPACE:
+                    properties.append((tag.localname, "".join(element.itertext()).strip()))
+        elif part_name == "docProps/custom.xml":
+            for element in root.iter():
+                if not isinstance(element.tag, str):
+                    continue
+                tag = etree.QName(element)
+                if (
+                    tag.namespace == _CUSTOM_PROPERTY_NAMESPACE
+                    and tag.localname == "property"
+                    and element.get("name")
+                ):
+                    properties.append(
+                        (element.get("name", ""), "".join(element.itertext()).strip())
+                    )
+        else:
+            return
+
+        forbidden = {
+            key.casefold() for key in self.profile.privacy.forbidden_metadata_keys
+        }
         expected = self.profile.privacy.fictional_values
-        for element in root.iter():
-            if not isinstance(element.tag, str):
-                continue
-            name = etree.QName(element).localname
-            value = (element.text or "").strip()
+        for name, value in properties:
             if not value:
                 continue
             lowered = name.casefold()
-            if lowered in {"creator", "lastmodifiedby"}:
-                if _normalized(value) != _normalized(expected.author):
-                    self.add(
-                        "PRIVACY.IDENTITY.AUTHOR",
-                        path,
-                        f"part:{part_name}",
-                        value,
-                        "A non-fictional identity value was found.",
-                    )
-            elif lowered in {"company", "manager"}:
+            location = f"part:{part_name}:metadata:{name}"
+            if lowered in forbidden:
                 self.add(
-                    "PRIVACY.IDENTITY.COMPANY",
+                    "PRIVACY.METADATA",
                     path,
-                    f"part:{part_name}",
+                    location,
+                    value,
+                    "Forbidden document metadata was found and redacted.",
+                )
+                continue
+            identity = _PERMITTED_IDENTITY_METADATA.get(lowered)
+            if identity and _normalized(value) != _normalized(
+                getattr(expected, identity)
+            ):
+                self.add(
+                    f"PRIVACY.IDENTITY.{identity.upper()}",
+                    path,
+                    location,
                     value,
                     "A non-fictional identity value was found.",
                 )
@@ -422,7 +470,9 @@ class _Scanner:
 
     def scan(self) -> None:
         paths: Iterable[Path]
-        if self.root.is_dir():
+        if self.root.is_symlink():
+            paths = (self.root,)
+        elif self.root.is_dir():
             paths = sorted(self.root.rglob("*"), key=lambda item: item.as_posix())
         else:
             paths = (self.root,)
@@ -432,10 +482,17 @@ class _Scanner:
                     self.skipped.add(self.display_path(path))
                 continue
             try:
-                if path.resolve() == self.denylist_path:
-                    self.skipped.add(self.display_path(path))
-                    continue
+                display_path = self.display_path(path)
                 if path.is_symlink():
+                    self.scan_filename(path, display_path)
+                    self.scan_text(
+                        str(path.readlink()),
+                        display_path,
+                        "symlink-target",
+                    )
+                    self.scanned.add(display_path)
+                    continue
+                if path.absolute() == self.denylist_path:
                     self.skipped.add(self.display_path(path))
                     continue
                 if not path.is_file():
@@ -443,7 +500,6 @@ class _Scanner:
             except OSError:
                 self.unreadable(path, self.display_path(path))
                 continue
-            display_path = self.display_path(path)
             self.scan_filename(path, display_path)
             self.scan_regular_file(path, display_path)
 
@@ -519,7 +575,9 @@ def release_check(
     source = Path(source)
     profile_path = Path(profile_path)
     denylist = Path(denylist_path) if denylist_path is not None else _default_denylist(source)
-    if not source.exists() or (not source.is_file() and not source.is_dir()):
+    if not source.is_symlink() and (
+        not source.exists() or (not source.is_file() and not source.is_dir())
+    ):
         raise ValueError("privacy scan source is invalid")
     deny_terms = _read_denylist(denylist)
     try:

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import fitz
 import pytest
+import yaml
 
 from thesis_format import cli
 from thesis_format.contracts import validate_privacy_report
@@ -30,6 +31,24 @@ def _write_docx(path: Path, parts: dict[str, str], media: tuple[str, ...] = ()) 
 
 def _rules(report: dict[str, object]) -> list[str]:
     return [finding["rule_id"] for finding in report["findings"]]  # type: ignore[index]
+
+
+def _profile_without_forbidden_key(
+    tmp_path: Path,
+    key: str,
+) -> Path:
+    profile = yaml.safe_load(PROFILE.read_text(encoding="utf-8"))
+    profile["privacy"]["forbidden_metadata_keys"] = [
+        value
+        for value in profile["privacy"]["forbidden_metadata_keys"]
+        if value.casefold() != key.casefold()
+    ]
+    path = tmp_path / "profile.yaml"
+    path.write_text(
+        yaml.safe_dump(profile, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return path
 
 
 def test_denylist_is_literal_casefolded_nfc_and_normalizes_path_separators(
@@ -108,6 +127,121 @@ def test_scans_docx_hidden_parts_relationships_properties_and_media_names(
         "part:docProps/custom.xml",
         "part:word/media/[REDACTED].png",
     } <= locations
+
+
+def test_docx_forbidden_metadata_keys_come_from_profile_for_all_property_parts(
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "thesis.docx"
+    _write_docx(
+        document,
+        {
+            "docProps/core.xml": (
+                '<cp:coreProperties '
+                'xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
+                'xmlns:dc="http://purl.org/dc/elements/1.1/">'
+                "<dc:creator>艾苹</dc:creator>"
+                "<cp:lastModifiedBy>艾苹</cp:lastModifiedBy>"
+                "</cp:coreProperties>"
+            ),
+            "docProps/app.xml": (
+                '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/'
+                '2006/extended-properties">'
+                "<Company>Apple University</Company>"
+                "</Properties>"
+            ),
+            "docProps/custom.xml": (
+                '<Properties '
+                'xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" '
+                'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+                '<property name="manager"><vt:lpwstr>艾苹</vt:lpwstr></property>'
+                "</Properties>"
+            ),
+        },
+    )
+
+    report = release_check(document, PROFILE, DENYLIST)
+
+    metadata_findings = [
+        finding
+        for finding in report["findings"]  # type: ignore[index]
+        if finding["rule_id"] == "PRIVACY.METADATA"
+    ]
+    assert len(metadata_findings) == 4
+    assert {finding["location"] for finding in metadata_findings} == {
+        "part:docProps/core.xml:metadata:creator",
+        "part:docProps/core.xml:metadata:lastModifiedBy",
+        "part:docProps/app.xml:metadata:Company",
+        "part:docProps/custom.xml:metadata:manager",
+    }
+    assert not any(
+        rule.startswith("PRIVACY.IDENTITY.") for rule in _rules(report)
+    )
+
+
+def test_permitted_docx_identity_metadata_must_use_fictional_value(
+    tmp_path: Path,
+) -> None:
+    profile = _profile_without_forbidden_key(tmp_path, "creator")
+    real_document = tmp_path / "real.docx"
+    fictional_document = tmp_path / "fictional.docx"
+    core_template = (
+        '<cp:coreProperties '
+        'xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
+        'xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        "<dc:creator>{author}</dc:creator>"
+        "</cp:coreProperties>"
+    )
+    _write_docx(
+        real_document,
+        {"docProps/core.xml": core_template.format(author="Real Person")},
+    )
+    _write_docx(
+        fictional_document,
+        {"docProps/core.xml": core_template.format(author="艾苹")},
+    )
+
+    real_report = release_check(real_document, profile, DENYLIST)
+    fictional_report = release_check(fictional_document, profile, DENYLIST)
+
+    assert "PRIVACY.IDENTITY.AUTHOR" in _rules(real_report)
+    assert "PRIVACY.METADATA" not in _rules(real_report)
+    assert not any(
+        rule.startswith(("PRIVACY.IDENTITY.", "PRIVACY.METADATA"))
+        for rule in _rules(fictional_report)
+    )
+
+
+def test_scans_symlink_target_text_without_following_including_broken_links(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    targets = {
+        "absolute-link": "/Users/private-person/Documents/thesis.docx",
+        "denylist-link": "../Secret Student/materials",
+        "pattern-link": "../private@example.test/materials",
+        "safe-link": "../public-assets/figure.png",
+    }
+    for name, target in targets.items():
+        (repository / name).symlink_to(target)
+
+    report = release_check(repository, PROFILE, DENYLIST)
+
+    findings_by_path = {
+        finding["path"]: finding["rule_id"]
+        for finding in report["findings"]  # type: ignore[index]
+    }
+    assert findings_by_path["absolute-link"] == "PRIVACY.ABSOLUTE_PATH"
+    assert findings_by_path["denylist-link"] == "PRIVACY.DENYLIST"
+    assert findings_by_path["pattern-link"] in {
+        "PRIVACY.EMAIL",
+        "PRIVACY.PATTERN.EMAIL",
+    }
+    assert "safe-link" not in findings_by_path
+    assert set(targets) <= set(report["scanned_files"])  # type: ignore[arg-type]
+    serialized = json.dumps(report)
+    assert all(target not in serialized for target in targets.values())
 
 
 def test_scans_pdf_text_and_metadata(tmp_path: Path) -> None:
