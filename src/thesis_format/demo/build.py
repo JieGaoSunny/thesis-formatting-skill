@@ -352,7 +352,15 @@ def _clear_story(story) -> None:
         paragraph._element.getparent().remove(paragraph._element)
 
 
-def _header_footer(section, header_instruction: str | None, page_style: str | None) -> None:
+def _header_footer(
+    section,
+    header_instruction: str | None,
+    page_style: str | None,
+    *,
+    header_placeholder: str = "标题",
+    header_number_instruction: str | None = None,
+    header_number_placeholder: str = "",
+) -> None:
     section.header.is_linked_to_previous = False
     section.footer.is_linked_to_previous = False
     _clear_story(section.header)
@@ -360,7 +368,10 @@ def _header_footer(section, header_instruction: str | None, page_style: str | No
     if header_instruction:
         header = section.header.add_paragraph()
         header.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        _field(header, header_instruction, "标题")
+        if header_number_instruction:
+            _field(header, header_number_instruction, header_number_placeholder)
+            header.add_run(" ")
+        _field(header, header_instruction, header_placeholder)
     if page_style:
         footer = section.footer.add_paragraph()
         footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -592,8 +603,11 @@ def build_template(
         appendix_section,
         'STYLEREF "AppleAppendixHeading"',
         "decimal",
+        header_placeholder="附录标题",
+        header_number_instruction='STYLEREF "AppleAppendixHeading" \\n',
+        header_number_placeholder="附录 A",
     )
-    appendix = _styled(document, "附录 A 附录标题", selected, "appendix_heading")
+    appendix = _styled(document, "附录标题", selected, "appendix_heading")
     _set_num_pr(appendix, 0, 11)
     _bookmark(appendix, "demo_appendix", 7)
     destination = Path(output_path)
@@ -706,10 +720,13 @@ def build_thesis(
         appendix_section,
         'STYLEREF "AppleAppendixHeading"',
         "decimal",
+        header_placeholder=model.appendix.title,
+        header_number_instruction='STYLEREF "AppleAppendixHeading" \\n',
+        header_number_placeholder="附录 A",
     )
     appendix = _styled(
         document,
-        f"附录 A {model.appendix.title}",
+        model.appendix.title,
         selected,
         "appendix_heading",
     )

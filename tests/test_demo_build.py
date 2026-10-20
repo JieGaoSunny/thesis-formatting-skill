@@ -60,6 +60,33 @@ def _document_xml(path: Path):
     return OoxmlPackage.open(path).xml("word/document.xml")
 
 
+def _rendered_numbered_text(path: Path, paragraph) -> str:
+    package = OoxmlPackage.open(path)
+    numbering = package.xml("word/numbering.xml")
+    num_id = paragraph.xpath(
+        "string(w:pPr/w:numPr/w:numId/@w:val)", namespaces={"w": W_NS}
+    )
+    level = paragraph.xpath(
+        "string(w:pPr/w:numPr/w:ilvl/@w:val)", namespaces={"w": W_NS}
+    ) or "0"
+    abstract_id = numbering.xpath(
+        "string(w:num[@w:numId=$num_id]/w:abstractNumId/@w:val)",
+        namespaces={"w": W_NS},
+        num_id=num_id,
+    )
+    level_node = numbering.xpath(
+        "w:abstractNum[@w:abstractNumId=$abstract_id]/w:lvl[@w:ilvl=$level]",
+        namespaces={"w": W_NS},
+        abstract_id=abstract_id,
+        level=level,
+    )[0]
+    label = level_node.xpath(
+        "string(w:lvlText/@w:val)", namespaces={"w": W_NS}
+    ).replace("%1", "A")
+    text = "".join(paragraph.xpath(".//w:t/text()", namespaces={"w": W_NS}))
+    return f"{label} {text}"
+
+
 def _caption_paragraphs(path: Path):
     root = _document_xml(path)
     return root.xpath(
@@ -224,6 +251,64 @@ def test_thesis_caption_titles_are_not_duplicated(tmp_path: Path) -> None:
         assert sum(text.count(title) for text in caption_text) == 1
 
 
+@pytest.mark.parametrize(
+    ("builder", "expected_title"),
+    (
+        (build_template, "附录标题"),
+        (build_thesis, "模拟记录字段与复算示例"),
+    ),
+)
+def test_appendix_numbering_supplies_the_only_prefix(
+    tmp_path: Path,
+    builder,
+    expected_title: str,
+) -> None:
+    output = builder(tmp_path / f"{builder.__name__}.docx", PROFILE)
+    package = OoxmlPackage.open(output)
+    root = package.xml("word/document.xml")
+    paragraphs = root.xpath(
+        ".//w:p[w:pPr/w:pStyle[@w:val=$style]]",
+        namespaces={"w": W_NS},
+        style=PROFILE.styles.appendix_heading.word_styles[0],
+    )
+
+    assert len(paragraphs) == 1
+    paragraph = paragraphs[0]
+    assert "".join(
+        paragraph.xpath(".//w:t/text()", namespaces={"w": W_NS})
+    ) == expected_title
+    rendered = _rendered_numbered_text(output, paragraph)
+    assert rendered == f"附录 A {expected_title}"
+    assert rendered.count("附录 A") == 1
+    assert paragraph.xpath(
+        "w:bookmarkStart[@w:name='demo_appendix']",
+        namespaces={"w": W_NS},
+    )
+
+    appendix_headers = []
+    for name in package.parts:
+        if not re.fullmatch(r"word/header\d+\.xml", name):
+            continue
+        header = package.xml(name)
+        codes = [
+            " ".join(value.split())
+            for value in header.xpath(
+                ".//w:instrText/text()", namespaces={"w": W_NS}
+            )
+        ]
+        if any("AppleAppendixHeading" in code for code in codes):
+            appendix_headers.append((header, codes))
+    assert len(appendix_headers) == 1
+    header, codes = appendix_headers[0]
+    assert codes == [
+        'STYLEREF "AppleAppendixHeading" \\n',
+        'STYLEREF "AppleAppendixHeading"',
+    ]
+    assert "".join(
+        header.xpath(".//w:t/text()", namespaces={"w": W_NS})
+    ) == rendered
+
+
 @pytest.mark.parametrize("builder", (build_template, build_before))
 def test_generated_docx_passes_external_ooxml_validator(
     tmp_path: Path,
@@ -321,7 +406,12 @@ def test_full_thesis_contains_fields_images_tables_and_back_matter(
     assert "ABSTRACT" in text
     assert "关键词：" in text
     assert "参考文献" in text
-    assert "附录 A" in text
+    appendix_heading = package.xml("word/document.xml").xpath(
+        ".//w:p[w:pPr/w:pStyle[@w:val=$style]]",
+        namespaces={"w": W_NS},
+        style=PROFILE.styles.appendix_heading.word_styles[0],
+    )[0]
+    assert _rendered_numbered_text(output, appendix_heading).startswith("附录 A ")
     assert "致谢" in text
     assert len(document.tables) >= 2
     assert len(package.related_parts("word/document.xml", "image")) >= 2
