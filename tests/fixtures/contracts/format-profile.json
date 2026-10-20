@@ -1,70 +1,793 @@
 {
-  "schema_version": "1.0.0",
-  "profile_id": "apple-university-thesis",
-  "name": "Apple University Thesis",
-  "locale": "zh-CN",
+  "profile": {
+    "id": "apple-university-thesis",
+    "display_name": "Apple University Thesis",
+    "schema_version": "1.0"
+  },
+  "metadata": {
+    "description": "Fictional Chinese thesis formatting profile for the public demonstration.",
+    "notes": [
+      "All institutions and identity values are fictional.",
+      "All measurements are stated in points or millimetres."
+    ]
+  },
   "page": {
-    "width_mm": 210,
-    "height_mm": 297,
-    "orientation": "portrait",
-    "margins_mm": {"top": 25.4, "right": 25.4, "bottom": 25.4, "left": 31.8},
-    "gutter_mm": 0
-  },
-  "typography": {
-    "body": {"font_family": "Noto Serif CJK SC", "size_pt": 12, "bold": false, "italic": false, "line_spacing": 1.5, "space_before_pt": 0, "space_after_pt": 0},
-    "heading_1": {"font_family": "Noto Sans CJK SC", "size_pt": 16, "bold": true, "italic": false, "line_spacing": 1.0, "space_before_pt": 12, "space_after_pt": 6},
-    "heading_2": {"font_family": "Noto Sans CJK SC", "size_pt": 14, "bold": true, "italic": false, "line_spacing": 1.0, "space_before_pt": 9, "space_after_pt": 4},
-    "caption": {"font_family": "Noto Serif CJK SC", "size_pt": 10.5, "bold": false, "italic": false, "line_spacing": 1.0, "space_before_pt": 3, "space_after_pt": 3},
-    "footnote": {"font_family": "Noto Serif CJK SC", "size_pt": 9, "bold": false, "italic": false, "line_spacing": 1.0, "space_before_pt": 0, "space_after_pt": 0}
-  },
-  "paragraph": {
-    "alignment": "justified",
-    "first_line_indent_chars": 2,
-    "keep_with_next": false,
-    "keep_lines_together": false,
-    "widow_control": true
-  },
-  "sections": {
-    "title_page": {"start_on": "new-page", "page_number_style": "none"},
-    "abstract": {"start_on": "new-page", "page_number_style": "roman-lower"},
-    "table_of_contents": {"start_on": "new-page", "page_number_style": "roman-lower"},
-    "body": {"start_on": "new-page", "page_number_style": "arabic"},
-    "references": {"start_on": "new-page", "page_number_style": "arabic"},
-    "appendices": {"start_on": "new-page", "page_number_style": "arabic"}
-  },
-  "numbering": {
-    "headings": "decimal",
-    "figures": "chapter-decimal",
-    "tables": "chapter-decimal",
-    "equations": "chapter-decimal",
-    "page_start": 1
-  },
-  "headers_footers": {
-    "different_first_page": true,
-    "different_odd_even": false,
+    "paper": {
+      "width_mm": 210,
+      "height_mm": 297
+    },
+    "body": {
+      "top_mm": 25.4,
+      "bottom_mm": 25.4,
+      "left_mm": 31.8,
+      "right_mm": 25.4
+    },
     "header_distance_mm": 12.7,
     "footer_distance_mm": 12.7,
-    "header_text": "{chapter_title}",
-    "footer_text": "{page_number}"
+    "section_start": {
+      "body": "next_page",
+      "major_back_matter": "next_page"
+    }
   },
-  "tables": {"alignment": "center", "cell_padding_mm": 1.5, "repeat_header_row": true, "allow_row_break": false},
-  "figures": {"alignment": "center", "max_width_percent": 100, "caption_position": "below"},
-  "references": {"style": "gb-t-7714", "hanging_indent_chars": 2, "sort": "citation-order"},
-  "role_detection": {
-    "style_names": {
-      "title": ["Title", "论文题目"],
-      "heading_1": ["Heading 1", "标题 1"],
-      "heading_2": ["Heading 2", "标题 2"],
-      "caption": ["Caption", "题注"],
-      "body": ["Normal", "正文"]
+  "styles": {
+    "title_zh": {
+      "paragraph": {
+        "alignment": "center",
+        "line_spacing": {"type": "multiple", "value": 1},
+        "space_before_pt": 0,
+        "space_after_pt": 18,
+        "first_line_chars": 0,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "run": {
+        "font_zh": "Noto Sans CJK SC",
+        "font_latin": "Noto Sans",
+        "size_pt": 22,
+        "bold": true,
+        "italic": false
+      },
+      "word_styles": ["TitleZH", "标题"]
     },
-    "text_patterns": [
-      {"role": "heading_1", "pattern": "^第[一二三四五六七八九十]+章", "flags": ["unicode"], "priority": 100},
-      {"role": "caption", "pattern": "^(图|表)\\s*\\d+", "flags": ["unicode"], "priority": 80}
+    "title_en": {
+      "paragraph": {
+        "alignment": "center",
+        "line_spacing": {"type": "multiple", "value": 1},
+        "space_before_pt": 0,
+        "space_after_pt": 18,
+        "first_line_chars": 0,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "run": {
+        "font_zh": "Noto Sans CJK SC",
+        "font_latin": "Noto Sans",
+        "size_pt": 18,
+        "bold": true,
+        "italic": false
+      },
+      "word_styles": ["TitleEN"]
+    },
+    "front_heading": {
+      "paragraph": {
+        "alignment": "center",
+        "line_spacing": {"type": "multiple", "value": 1},
+        "space_before_pt": 12,
+        "space_after_pt": 12,
+        "first_line_chars": 0,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "run": {
+        "font_zh": "Noto Sans CJK SC",
+        "font_latin": "Noto Sans",
+        "size_pt": 16,
+        "bold": true,
+        "italic": false
+      },
+      "word_styles": ["FrontHeading", "前置标题"]
+    },
+    "heading_1": {
+      "paragraph": {
+        "alignment": "center",
+        "line_spacing": {"type": "multiple", "value": 1},
+        "space_before_pt": 12,
+        "space_after_pt": 6,
+        "first_line_chars": 0,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": true,
+        "page_break_before": true
+      },
+      "run": {
+        "font_zh": "Noto Sans CJK SC",
+        "font_latin": "Noto Sans",
+        "size_pt": 16,
+        "bold": true,
+        "italic": false
+      },
+      "word_styles": ["Heading1", "标题 1"]
+    },
+    "heading_2": {
+      "paragraph": {
+        "alignment": "left",
+        "line_spacing": {"type": "multiple", "value": 1},
+        "space_before_pt": 9,
+        "space_after_pt": 4,
+        "first_line_chars": 0,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "run": {
+        "font_zh": "Noto Sans CJK SC",
+        "font_latin": "Noto Sans",
+        "size_pt": 14,
+        "bold": true,
+        "italic": false
+      },
+      "word_styles": ["Heading2", "标题 2"]
+    },
+    "heading_3": {
+      "paragraph": {
+        "alignment": "left",
+        "line_spacing": {"type": "multiple", "value": 1},
+        "space_before_pt": 6,
+        "space_after_pt": 3,
+        "first_line_chars": 0,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "run": {
+        "font_zh": "Noto Sans CJK SC",
+        "font_latin": "Noto Sans",
+        "size_pt": 12,
+        "bold": true,
+        "italic": false
+      },
+      "word_styles": ["Heading3", "标题 3"]
+    },
+    "body": {
+      "paragraph": {
+        "alignment": "justify",
+        "line_spacing": {"type": "multiple", "value": 1.5},
+        "space_before_pt": 0,
+        "space_after_pt": 0,
+        "first_line_chars": 2,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "run": {
+        "font_zh": "Noto Serif CJK SC",
+        "font_latin": "Noto Serif",
+        "size_pt": 12,
+        "bold": false,
+        "italic": false
+      },
+      "word_styles": ["BodyText", "正文"]
+    },
+    "abstract_zh": {
+      "paragraph": {
+        "alignment": "justify",
+        "line_spacing": {"type": "multiple", "value": 1.5},
+        "space_before_pt": 0,
+        "space_after_pt": 0,
+        "first_line_chars": 2,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "run": {
+        "font_zh": "Noto Serif CJK SC",
+        "font_latin": "Noto Serif",
+        "size_pt": 12,
+        "bold": false,
+        "italic": false
+      },
+      "word_styles": ["AbstractZH", "中文摘要正文"]
+    },
+    "abstract_en": {
+      "paragraph": {
+        "alignment": "justify",
+        "line_spacing": {"type": "multiple", "value": 1.5},
+        "space_before_pt": 0,
+        "space_after_pt": 0,
+        "first_line_chars": 0,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "run": {
+        "font_zh": "Noto Serif CJK SC",
+        "font_latin": "Noto Serif",
+        "size_pt": 12,
+        "bold": false,
+        "italic": false
+      },
+      "word_styles": ["AbstractEN"]
+    },
+    "keywords": {
+      "paragraph": {
+        "alignment": "left",
+        "line_spacing": {"type": "multiple", "value": 1.5},
+        "space_before_pt": 6,
+        "space_after_pt": 0,
+        "first_line_chars": 0,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "run": {
+        "font_zh": "Noto Serif CJK SC",
+        "font_latin": "Noto Serif",
+        "size_pt": 12,
+        "bold": false,
+        "italic": false
+      },
+      "word_styles": ["Keywords", "关键词"]
+    },
+    "figure_caption": {
+      "paragraph": {
+        "alignment": "center",
+        "line_spacing": {"type": "multiple", "value": 1},
+        "space_before_pt": 3,
+        "space_after_pt": 6,
+        "first_line_chars": 0,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "run": {
+        "font_zh": "Noto Serif CJK SC",
+        "font_latin": "Noto Serif",
+        "size_pt": 10.5,
+        "bold": false,
+        "italic": false
+      },
+      "word_styles": ["FigureCaption", "图题"]
+    },
+    "table_caption": {
+      "paragraph": {
+        "alignment": "center",
+        "line_spacing": {"type": "multiple", "value": 1},
+        "space_before_pt": 6,
+        "space_after_pt": 3,
+        "first_line_chars": 0,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "run": {
+        "font_zh": "Noto Serif CJK SC",
+        "font_latin": "Noto Serif",
+        "size_pt": 10.5,
+        "bold": false,
+        "italic": false
+      },
+      "word_styles": ["TableCaption", "表题"]
+    },
+    "source_note": {
+      "paragraph": {
+        "alignment": "left",
+        "line_spacing": {"type": "multiple", "value": 1},
+        "space_before_pt": 0,
+        "space_after_pt": 3,
+        "first_line_chars": 0,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "run": {
+        "font_zh": "Noto Serif CJK SC",
+        "font_latin": "Noto Serif",
+        "size_pt": 9,
+        "bold": false,
+        "italic": false
+      },
+      "word_styles": ["SourceNote", "资料来源"]
+    },
+    "table_body": {
+      "paragraph": {
+        "alignment": "left",
+        "line_spacing": {"type": "multiple", "value": 1},
+        "space_before_pt": 0,
+        "space_after_pt": 0,
+        "first_line_chars": 0,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "run": {
+        "font_zh": "Noto Serif CJK SC",
+        "font_latin": "Noto Serif",
+        "size_pt": 10.5,
+        "bold": false,
+        "italic": false
+      },
+      "word_styles": ["TableBody", "表格正文"]
+    },
+    "reference": {
+      "paragraph": {
+        "alignment": "left",
+        "line_spacing": {"type": "exact", "value_pt": 18},
+        "space_before_pt": 0,
+        "space_after_pt": 0,
+        "first_line_chars": 0,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 7.4,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "run": {
+        "font_zh": "Noto Serif CJK SC",
+        "font_latin": "Noto Serif",
+        "size_pt": 10.5,
+        "bold": false,
+        "italic": false
+      },
+      "word_styles": ["Reference", "参考文献"]
+    },
+    "appendix_heading": {
+      "paragraph": {
+        "alignment": "center",
+        "line_spacing": {"type": "multiple", "value": 1},
+        "space_before_pt": 12,
+        "space_after_pt": 6,
+        "first_line_chars": 0,
+        "left_indent_mm": 0,
+        "hanging_indent_mm": 0,
+        "keep_with_next": true,
+        "page_break_before": true
+      },
+      "run": {
+        "font_zh": "Noto Sans CJK SC",
+        "font_latin": "Noto Sans",
+        "size_pt": 16,
+        "bold": true,
+        "italic": false
+      },
+      "word_styles": ["AppendixHeading", "附录标题"]
+    }
+  },
+  "role_detection": {
+    "text_patterns": {
+      "title_zh": [],
+      "title_en": [],
+      "front_heading": [
+        {
+          "pattern": "^(目录|图目录|表目录|参考文献|致谢)$",
+          "flags": ["unicode"],
+          "priority": 100
+        }
+      ],
+      "heading_1": [
+        {
+          "pattern": "^第[一二三四五六七八九十]+章\\s+.+$",
+          "flags": ["unicode"],
+          "priority": 100
+        }
+      ],
+      "heading_2": [
+        {
+          "pattern": "^\\d+\\.\\d+\\s+.+$",
+          "flags": ["unicode"],
+          "priority": 90
+        }
+      ],
+      "heading_3": [
+        {
+          "pattern": "^\\d+\\.\\d+\\.\\d+\\s+.+$",
+          "flags": ["unicode"],
+          "priority": 95
+        }
+      ],
+      "body": [],
+      "abstract_zh": [
+        {
+          "pattern": "^摘\\s*要$",
+          "flags": ["unicode"],
+          "priority": 100
+        }
+      ],
+      "abstract_en": [
+        {
+          "pattern": "^ABSTRACT$",
+          "flags": ["ignore_case", "unicode"],
+          "priority": 100
+        }
+      ],
+      "keywords": [
+        {
+          "pattern": "^(关键词|Keywords)\\s*[:：]",
+          "flags": ["ignore_case", "unicode"],
+          "priority": 100
+        }
+      ],
+      "figure_caption": [
+        {
+          "pattern": "^图\\s*\\d+[.-]\\d+\\s+.+$",
+          "flags": ["unicode"],
+          "priority": 100
+        }
+      ],
+      "table_caption": [
+        {
+          "pattern": "^表\\s*\\d+[.-]\\d+\\s+.+$",
+          "flags": ["unicode"],
+          "priority": 100
+        }
+      ],
+      "source_note": [
+        {
+          "pattern": "^资料来源[:：]",
+          "flags": ["unicode"],
+          "priority": 100
+        }
+      ],
+      "table_body": [],
+      "reference": [
+        {
+          "pattern": "^\\[\\d+\\]\\s+.+$",
+          "flags": ["unicode"],
+          "priority": 100
+        }
+      ],
+      "appendix_heading": [
+        {
+          "pattern": "^附录\\s+[A-Z]\\s+.+$",
+          "flags": ["unicode"],
+          "priority": 100
+        }
+      ]
+    },
+    "position_constraints": {
+      "title_zh": [
+        {
+          "section": "title_page",
+          "min_index": 0,
+          "max_index": 30,
+          "first_page_only": true
+        }
+      ],
+      "title_en": [
+        {
+          "section": "title_page",
+          "min_index": 0,
+          "max_index": 30,
+          "first_page_only": true
+        }
+      ],
+      "front_heading": [
+        {
+          "section": "front_matter",
+          "min_index": 0,
+          "max_index": null,
+          "first_page_only": false
+        }
+      ],
+      "heading_1": [
+        {
+          "section": "body",
+          "min_index": 0,
+          "max_index": null,
+          "first_page_only": false
+        }
+      ],
+      "heading_2": [
+        {
+          "section": "body",
+          "min_index": 0,
+          "max_index": null,
+          "first_page_only": false
+        }
+      ],
+      "heading_3": [
+        {
+          "section": "body",
+          "min_index": 0,
+          "max_index": null,
+          "first_page_only": false
+        }
+      ],
+      "body": [
+        {
+          "section": "body",
+          "min_index": 0,
+          "max_index": null,
+          "first_page_only": false
+        }
+      ],
+      "abstract_zh": [
+        {
+          "section": "front_matter",
+          "min_index": 0,
+          "max_index": null,
+          "first_page_only": false
+        }
+      ],
+      "abstract_en": [
+        {
+          "section": "front_matter",
+          "min_index": 0,
+          "max_index": null,
+          "first_page_only": false
+        }
+      ],
+      "keywords": [
+        {
+          "section": "front_matter",
+          "min_index": 0,
+          "max_index": null,
+          "first_page_only": false
+        }
+      ],
+      "figure_caption": [
+        {
+          "section": "any",
+          "min_index": 0,
+          "max_index": null,
+          "first_page_only": false
+        }
+      ],
+      "table_caption": [
+        {
+          "section": "any",
+          "min_index": 0,
+          "max_index": null,
+          "first_page_only": false
+        }
+      ],
+      "source_note": [
+        {
+          "section": "any",
+          "min_index": 0,
+          "max_index": null,
+          "first_page_only": false
+        }
+      ],
+      "table_body": [
+        {
+          "section": "any",
+          "min_index": 0,
+          "max_index": null,
+          "first_page_only": false
+        }
+      ],
+      "reference": [
+        {
+          "section": "references",
+          "min_index": 0,
+          "max_index": null,
+          "first_page_only": false
+        }
+      ],
+      "appendix_heading": [
+        {
+          "section": "appendix",
+          "min_index": 0,
+          "max_index": null,
+          "first_page_only": false
+        }
+      ]
+    }
+  },
+  "numbering": {
+    "chapters": {
+      "format": "chinese_chapter",
+      "separator": " ",
+      "restart_scope": "document"
+    },
+    "sections": {
+      "format": "decimal",
+      "separator": ".",
+      "restart_scope": "chapter"
+    },
+    "appendices": {
+      "format": "upper_alpha",
+      "separator": " ",
+      "restart_scope": "document"
+    },
+    "figures": {
+      "format": "chapter_sequence",
+      "separator": "-",
+      "restart_scope": "chapter"
+    },
+    "tables": {
+      "format": "chapter_sequence",
+      "separator": "-",
+      "restart_scope": "chapter"
+    }
+  },
+  "front_matter": {
+    "parts": [
+      {
+        "id": "title_zh",
+        "heading_role": "title_zh",
+        "required": true,
+        "starts_section": true,
+        "page_number_style": "none",
+        "show_header": false
+      },
+      {
+        "id": "title_en",
+        "heading_role": "title_en",
+        "required": true,
+        "starts_section": false,
+        "page_number_style": "none",
+        "show_header": false
+      },
+      {
+        "id": "abstract_zh",
+        "heading_role": "abstract_zh",
+        "required": true,
+        "starts_section": true,
+        "page_number_style": "upper_roman",
+        "show_header": true
+      },
+      {
+        "id": "abstract_en",
+        "heading_role": "abstract_en",
+        "required": true,
+        "starts_section": true,
+        "page_number_style": "upper_roman",
+        "show_header": true
+      },
+      {
+        "id": "toc",
+        "heading_role": "front_heading",
+        "required": true,
+        "starts_section": true,
+        "page_number_style": "upper_roman",
+        "show_header": true
+      },
+      {
+        "id": "list_of_figures",
+        "heading_role": "front_heading",
+        "required": true,
+        "starts_section": true,
+        "page_number_style": "upper_roman",
+        "show_header": true
+      },
+      {
+        "id": "list_of_tables",
+        "heading_role": "front_heading",
+        "required": true,
+        "starts_section": true,
+        "page_number_style": "upper_roman",
+        "show_header": true
+      }
+    ]
+  },
+  "fields": {
+    "toc": {
+      "required": true,
+      "field_code": "TOC \\o \"1-3\" \\h \\z \\u",
+      "levels": {
+        "min": 1,
+        "max": 3
+      }
+    },
+    "list_of_figures": {
+      "required": true,
+      "field_code": "TOC \\h \\z \\c \"图\"",
+      "levels": null
+    },
+    "list_of_tables": {
+      "required": true,
+      "field_code": "TOC \\h \\z \\c \"表\"",
+      "levels": null
+    },
+    "page_number": {
+      "front_start": 1,
+      "body_start": 1,
+      "alignment": "center"
+    },
+    "cross_references": {
+      "require_existing_target": true,
+      "mark_dirty_on_write": true
+    }
+  },
+  "headers_footers": {
+    "front_matter": {
+      "header_enabled": true,
+      "header_source": "current_front_heading",
+      "header_style_role": "front_heading",
+      "page_number_enabled": true,
+      "page_number_style": "upper_roman",
+      "page_number_alignment": "center"
+    },
+    "body": {
+      "header_enabled": true,
+      "header_source": "current_heading_1",
+      "header_style_role": "heading_1",
+      "page_number_enabled": true,
+      "page_number_style": "decimal",
+      "page_number_alignment": "center"
+    },
+    "appendix": {
+      "header_enabled": true,
+      "header_source": "current_appendix_heading",
+      "header_style_role": "appendix_heading",
+      "page_number_enabled": true,
+      "page_number_style": "decimal",
+      "page_number_alignment": "center"
+    },
+    "section_linking": {
+      "link_body_headers": true,
+      "link_body_footers": true,
+      "link_appendix_headers": true,
+      "link_appendix_footers": true
+    }
+  },
+  "figures": {
+    "max_width_mm": 152.8,
+    "alignment": "center",
+    "caption_position": "below",
+    "caption_keep_with_object": true,
+    "source_note_required_for_non_original": true
+  },
+  "tables": {
+    "caption_position": "above",
+    "repeat_header": true,
+    "allow_row_split": false,
+    "border_model": "three_line",
+    "continued_table_policy": "continued_label"
+  },
+  "references": {
+    "citation_system": "numeric",
+    "line_spacing_pt": 18,
+    "space_before_pt": 0,
+    "space_after_pt": 0,
+    "hanging_indent_mm": 7.4
+  },
+  "privacy": {
+    "fictional_values": {
+      "institution_zh": "苹果大学",
+      "institution_en": "Apple University",
+      "author": "示例作者",
+      "student_id": "AU-DEMO-0001",
+      "adviser": "示例导师"
+    },
+    "forbidden_metadata_keys": [
+      "creator",
+      "lastModifiedBy",
+      "company",
+      "manager"
     ],
-    "position_constraints": [
-      {"role": "title", "section": "title_page", "min_index": 0, "max_index": 10, "first_page_only": true},
-      {"role": "heading_1", "section": "body", "min_index": 0, "max_index": null, "first_page_only": false}
+    "generic_patterns": [
+      {
+        "id": "email",
+        "regex": "\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b",
+        "flags": "iu"
+      },
+      {
+        "id": "student-id",
+        "regex": "\\b\\d{8,14}\\b",
+        "flags": "u"
+      }
+    ],
+    "unresolved_placeholder_patterns": [
+      "\\{\\{[^{}]+\\}\\}",
+      "\\[[A-Z_]+\\]",
+      "TODO|TBD"
     ]
   }
 }

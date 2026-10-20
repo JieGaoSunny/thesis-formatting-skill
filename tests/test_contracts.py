@@ -26,6 +26,24 @@ CONTRACTS = {
     "privacy-report": "privacy-report.json",
     "render-manifest": "render-manifest.json",
 }
+PROFILE_ROLES = {
+    "title_zh",
+    "title_en",
+    "front_heading",
+    "heading_1",
+    "heading_2",
+    "heading_3",
+    "body",
+    "abstract_zh",
+    "abstract_en",
+    "keywords",
+    "figure_caption",
+    "table_caption",
+    "source_note",
+    "table_body",
+    "reference",
+    "appendix_heading",
+}
 
 
 def fixture(name: str) -> dict:
@@ -43,20 +61,77 @@ def test_valid_contract_fixtures(contract_name: str) -> None:
     validate_contract(contract_name, fixture(contract_name))
 
 
+def test_format_profile_fixture_covers_approved_contract() -> None:
+    profile = fixture("format-profile")
+
+    assert set(profile) == {
+        "profile",
+        "metadata",
+        "page",
+        "styles",
+        "role_detection",
+        "numbering",
+        "front_matter",
+        "fields",
+        "headers_footers",
+        "figures",
+        "tables",
+        "references",
+        "privacy",
+    }
+    assert set(profile["styles"]) == PROFILE_ROLES
+    assert set(profile["role_detection"]["text_patterns"]) == PROFILE_ROLES
+    assert set(profile["role_detection"]["position_constraints"]) == PROFILE_ROLES
+
+
 def test_contract_error_includes_json_path() -> None:
     profile = fixture("format-profile")
-    del profile["role_detection"]["text_patterns"][0]["pattern"]
+    del profile["role_detection"]["text_patterns"]["heading_1"][0]["pattern"]
 
-    with pytest.raises(ContractError, match=r"\$\.role_detection\.text_patterns\[0\]"):
+    with pytest.raises(
+        ContractError,
+        match=r"\$\.role_detection\.text_patterns\.heading_1\[0\]",
+    ):
         validate_contract("format-profile", profile)
 
 
-def test_unknown_keys_are_rejected_recursively() -> None:
-    profile = fixture("format-profile")
-    profile["role_detection"]["text_patterns"][0]["unknown"] = True
+def object_paths(value: object, path: tuple[str | int, ...] = ()):
+    if isinstance(value, dict):
+        yield path
+        for key, child in value.items():
+            yield from object_paths(child, (*path, key))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from object_paths(child, (*path, index))
 
-    with pytest.raises(ContractError, match=r"unknown"):
-        validate_contract("format-profile", profile)
+
+def value_at_path(value: object, path: tuple[str | int, ...]) -> object:
+    current = value
+    for part in path:
+        current = current[part]  # type: ignore[index]
+    return current
+
+
+@pytest.mark.parametrize("contract_name", CONTRACTS)
+def test_unknown_keys_are_rejected_at_every_object_path(contract_name: str) -> None:
+    allowed_maps = {
+        ("privacy-report", ("summary",)),
+    }
+    document = fixture(contract_name)
+
+    for path in object_paths(document):
+        if (contract_name, path) in allowed_maps:
+            continue
+        mutated = copy.deepcopy(document)
+        target = value_at_path(mutated, path)
+        assert isinstance(target, dict)
+        target["unknown_contract_key"] = True
+
+        with pytest.raises(
+            ContractError,
+            match=r"unknown_contract_key",
+        ):
+            validate_contract(contract_name, mutated)
 
 
 @pytest.mark.parametrize("contract_name,collection", [("audit", "findings"), ("transformation-result", "changes")])
