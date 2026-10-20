@@ -127,10 +127,28 @@
         "rule_id": {"$ref": "#/$defs/ruleId"},
         "location": {"$ref": "#/$defs/location"},
         "operation": {"type": "string", "minLength": 1},
+        "node_id": {"type": "string", "minLength": 1},
+        "relationship_sha256": {"$ref": "#/$defs/sha256"},
         "before": {"$ref": "#/$defs/jsonValue"},
         "after": {"$ref": "#/$defs/jsonValue"},
         "status": {"enum": ["applied", "skipped", "failed"]}
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"operation": {"const": "move_caption"}},
+            "required": ["operation"]
+          },
+          "then": {
+            "required": ["node_id", "relationship_sha256"],
+            "properties": {
+              "rule_id": {
+                "enum": ["FIGURE.CAPTION.POSITION", "TABLE.CAPTION.POSITION"]
+              }
+            }
+          }
+        }
+      ]
     },
     "contentComparison": {
       "type": "object",
@@ -150,8 +168,9 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["node_id", "before", "after"],
+            "required": ["kind", "node_id", "before", "after"],
             "properties": {
+              "kind": {"enum": ["added", "removed", "changed", "reordered"]},
               "node_id": {"type": "string", "minLength": 1},
               "before": {"$ref": "#/$defs/jsonValue"},
               "after": {"$ref": "#/$defs/jsonValue"}

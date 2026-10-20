@@ -35,13 +35,16 @@ def _object_identity(node: Mapping[str, object]) -> tuple[object, object] | None
     return node["node_type"], node.get("relationship_hash") or node["node_id"]
 
 
-def _adjacent_identity(
+def _adjacent_identities(
     nodes: list[dict[str, object]], index: int, object_type: str
-) -> tuple[object, object] | None:
+) -> set[tuple[object, object]]:
+    identities: set[tuple[object, object]] = set()
     for neighbor in (index - 1, index + 1):
         if 0 <= neighbor < len(nodes) and nodes[neighbor]["node_type"] == object_type:
-            return _object_identity(nodes[neighbor])
-    return None
+            identity = _object_identity(nodes[neighbor])
+            if identity is not None:
+                identities.add(identity)
+    return identities
 
 
 def _caption_move_allowed(
@@ -66,22 +69,33 @@ def _caption_move_allowed(
     before_node = before_body[before_index]
     after_node = after_body[after_index]
     if (
-        before_node["node_type"] != "paragraph"
+        before_node["node_type"] != "caption"
+        or after_node["node_type"] != "caption"
         or before_node["normalized_text"] != after_node["normalized_text"]
     ):
         return False
     for change in changes:
-        if change.get("operation") != "move_caption" or change.get("status", "applied") != "applied":
+        if (
+            change.get("operation") != "move_caption"
+            or change.get("status") != "applied"
+            or change.get("node_id") != node_id
+        ):
             continue
         rule_id = str(change.get("rule_id", ""))
-        object_type = "image" if rule_id.startswith("FIGURE.") else (
-            "table" if rule_id.startswith("TABLE.") else ""
-        )
-        if not object_type:
+        object_type = {
+            "FIGURE.CAPTION.POSITION": "image",
+            "TABLE.CAPTION.POSITION": "table",
+        }.get(rule_id)
+        relationship_sha256 = change.get("relationship_sha256")
+        if object_type is None or not isinstance(relationship_sha256, str):
             continue
-        old_identity = _adjacent_identity(before_body, before_index, object_type)
-        new_identity = _adjacent_identity(after_body, after_index, object_type)
-        if old_identity is not None and old_identity == new_identity:
+        expected_identity = (object_type, relationship_sha256)
+        if (
+            expected_identity
+            in _adjacent_identities(before_body, before_index, object_type)
+            and expected_identity
+            in _adjacent_identities(after_body, after_index, object_type)
+        ):
             return True
     return False
 
@@ -94,10 +108,17 @@ def compare_snapshots(
 ) -> dict[str, object]:
     """Return explicit added, removed, changed, and reordered differences."""
 
+    changes = tuple(changes)
     before_flat = _flatten(before)
     after_flat = _flatten(after)
-    before_by_id = {str(node["node_id"]): (collection, node) for collection, node in before_flat}
-    after_by_id = {str(node["node_id"]): (collection, node) for collection, node in after_flat}
+    before_by_id = {
+        (collection, str(node["node_id"])): node
+        for collection, node in before_flat
+    }
+    after_by_id = {
+        (collection, str(node["node_id"])): node
+        for collection, node in after_flat
+    }
     shared = set(before_by_id) & set(after_by_id)
     differences: list[dict[str, object]] = []
     shared_order_unchanged: dict[str, bool] = {}
@@ -105,31 +126,31 @@ def compare_snapshots(
         before_shared = [
             str(node["node_id"])
             for name, node in before_flat
-            if name == collection and str(node["node_id"]) in shared
+            if name == collection and (name, str(node["node_id"])) in shared
         ]
         after_shared = [
             str(node["node_id"])
             for name, node in after_flat
-            if name == collection and str(node["node_id"]) in shared
+            if name == collection and (name, str(node["node_id"])) in shared
         ]
         shared_order_unchanged[collection] = before_shared == after_shared
 
     before_unmatched = [
         (collection, node)
         for collection, node in before_flat
-        if str(node["node_id"]) not in shared
+        if (collection, str(node["node_id"])) not in shared
     ]
     after_unmatched = [
         (collection, node)
         for collection, node in after_flat
-        if str(node["node_id"]) not in shared
+        if (collection, str(node["node_id"])) not in shared
     ]
     after_by_structure = {
         _structural_key(collection, node): (collection, node)
         for collection, node in after_unmatched
     }
-    changed_after_ids: set[str] = set()
-    changed_before_ids: set[str] = set()
+    changed_after_ids: set[tuple[str, str]] = set()
+    changed_before_ids: set[tuple[str, str]] = set()
     for collection, node in before_unmatched:
         if not shared_order_unchanged[collection]:
             continue
@@ -137,8 +158,8 @@ def compare_snapshots(
         if match is None:
             continue
         _, after_node = match
-        changed_before_ids.add(str(node["node_id"]))
-        changed_after_ids.add(str(after_node["node_id"]))
+        changed_before_ids.add((collection, str(node["node_id"])))
+        changed_after_ids.add((collection, str(after_node["node_id"])))
         differences.append(
             {
                 "kind": "changed",
@@ -149,7 +170,7 @@ def compare_snapshots(
         )
 
     for collection, node in before_unmatched:
-        if str(node["node_id"]) not in changed_before_ids:
+        if (collection, str(node["node_id"])) not in changed_before_ids:
             differences.append(
                 {
                     "kind": "removed",
@@ -159,7 +180,7 @@ def compare_snapshots(
                 }
             )
     for collection, node in after_unmatched:
-        if str(node["node_id"]) not in changed_after_ids:
+        if (collection, str(node["node_id"])) not in changed_after_ids:
             differences.append(
                 {
                     "kind": "added",
@@ -173,12 +194,12 @@ def compare_snapshots(
         before_ids = [
             str(node["node_id"])
             for node in before[collection]  # type: ignore[index]
-            if str(node["node_id"]) in shared
+            if (collection, str(node["node_id"])) in shared
         ]
         after_ids = [
             str(node["node_id"])
             for node in after[collection]  # type: ignore[index]
-            if str(node["node_id"]) in shared
+            if (collection, str(node["node_id"])) in shared
         ]
         if before_ids == after_ids:
             continue
@@ -203,8 +224,8 @@ def compare_snapshots(
                 {
                     "kind": "reordered",
                     "node_id": node_id,
-                    "before": before_by_id[node_id][1],
-                    "after": after_by_id[node_id][1],
+                    "before": before_by_id[(collection, node_id)],
+                    "after": after_by_id[(collection, node_id)],
                 }
             )
 

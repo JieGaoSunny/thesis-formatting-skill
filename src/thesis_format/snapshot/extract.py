@@ -26,7 +26,8 @@ W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
-NS = {"w": W_NS, "r": R_NS, "wp": WP_NS, "a": A_NS}
+M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+NS = {"w": W_NS, "r": R_NS, "wp": WP_NS, "a": A_NS, "m": M_NS}
 W = f"{{{W_NS}}}"
 R = f"{{{R_NS}}}"
 EXCLUDED_FIELDS = frozenset(
@@ -58,7 +59,11 @@ def _paragraph_text(paragraph: etree._Element, *, exclude_results: bool) -> str:
                 stack.pop()
         elif local == "instrText" and stack and descendant.text:
             stack[-1]["instruction"] = str(stack[-1]["instruction"]) + descendant.text
-        elif local == "t" and descendant.text:
+        elif (
+            local == "t"
+            and etree.QName(descendant).namespace == W_NS
+            and descendant.text
+        ):
             simple = next(
                 (
                     ancestor
@@ -117,7 +122,7 @@ def _field_role(paragraph: etree._Element) -> str | None:
 
 def _clean_paragraph(paragraph: etree._Element, profile: FormatProfile) -> str:
     visible = _paragraph_text(paragraph, exclude_results=False)
-    role = _field_role(paragraph) or _style_role(paragraph, visible, profile)
+    role = _paragraph_role(paragraph, visible, profile)
     filtered = _paragraph_text(paragraph, exclude_results=True)
     cleaned = strip_manual_numbering(filtered, role, profile, evidence_text=visible)
     if role == "figure_caption" and cleaned.startswith("图 "):
@@ -125,6 +130,16 @@ def _clean_paragraph(paragraph: etree._Element, profile: FormatProfile) -> str:
     if role == "table_caption" and cleaned.startswith("表 "):
         cleaned = normalize_text(cleaned[1:])
     return cleaned
+
+
+def _paragraph_role(
+    paragraph: etree._Element,
+    visible_text: str,
+    profile: FormatProfile,
+) -> str | None:
+    return _field_role(paragraph) or _style_role(
+        paragraph, visible_text, profile
+    )
 
 
 def _relationship_map(
@@ -212,6 +227,31 @@ def _images(
     return result
 
 
+def _equations(
+    element: etree._Element,
+    part: str,
+    base_path: str,
+    source_index: int,
+) -> list[dict[str, object]]:
+    equations = element.xpath(
+        ".//m:oMathPara | .//m:oMath[not(ancestor::m:oMathPara)]",
+        namespaces=NS,
+    )
+    result: list[dict[str, object]] = []
+    for equation_index, equation in enumerate(equations, start=1):
+        text = normalize_text("".join(equation.xpath(".//m:t/text()", namespaces=NS)))
+        result.append(
+            _candidate(
+                "equation",
+                text,
+                part,
+                f"{base_path}/m:equation[{equation_index}]",
+                source_index + len(result),
+            )
+        )
+    return result
+
+
 def _story_nodes(
     package: OoxmlPackage, profile: FormatProfile
 ) -> list[dict[str, object]]:
@@ -227,11 +267,15 @@ def _story_nodes(
         if local == "p":
             paragraph_number += 1
             base_path = f"/w:document/w:body/w:p[{paragraph_number}]"
+            visible = _paragraph_text(child, exclude_results=False)
+            role = _paragraph_role(child, visible, profile)
             text = _clean_paragraph(child, profile)
             if text:
                 result.append(
                     _candidate(
-                        "paragraph",
+                        "caption"
+                        if role in {"figure_caption", "table_caption"}
+                        else "paragraph",
                         text,
                         "word/document.xml",
                         base_path,
@@ -248,6 +292,14 @@ def _story_nodes(
             )
             result.extend(images)
             source_index += len(images)
+            equations = _equations(
+                child,
+                "word/document.xml",
+                base_path,
+                source_index,
+            )
+            result.extend(equations)
+            source_index += len(equations)
         elif local == "tbl":
             table_number += 1
             cells = child.xpath("./w:tr/w:tc", namespaces=NS)
@@ -296,6 +348,67 @@ def _story_nodes(
                         )
                     )
                     source_index = len(result)
+                    equations = _equations(
+                        cell,
+                        "word/document.xml",
+                        (
+                            f"/w:document/w:body/w:tbl[{table_number}]"
+                            f"/w:tr[{row_index}]/w:tc[{column_index}]"
+                        ),
+                        source_index,
+                    )
+                    result.extend(equations)
+                    source_index += len(equations)
+    return result
+
+
+def _note_nodes(
+    package: OoxmlPackage,
+    profile: FormatProfile,
+    kind: str,
+    source_index: int,
+) -> list[dict[str, object]]:
+    part = f"word/{kind}s.xml"
+    if part not in package.parts:
+        return []
+    root = package.xml(part)
+    notes = root.xpath(f"./w:{kind}", namespaces=NS)
+
+    def note_key(note: etree._Element) -> tuple[int, int | str]:
+        note_id = note.get(f"{W}id", "")
+        try:
+            return 0, int(note_id)
+        except ValueError:
+            return 1, note_id
+
+    result: list[dict[str, object]] = []
+    for note in sorted(notes, key=note_key):
+        note_id = note.get(f"{W}id", "")
+        try:
+            if int(note_id) < 1:
+                continue
+        except ValueError:
+            pass
+        text = normalize_text(
+            " ".join(
+                _clean_paragraph(paragraph, profile)
+                for paragraph in note.xpath(".//w:p", namespaces=NS)
+            )
+        )
+        base_path = f"/w:{kind}s/w:{kind}[@w:id='{note_id}']"
+        if text:
+            result.append(
+                _candidate(
+                    kind,
+                    text,
+                    part,
+                    base_path,
+                    source_index + len(result),
+                )
+            )
+        result.extend(
+            _equations(note, part, base_path, source_index + len(result))
+        )
     return result
 
 
@@ -389,6 +502,8 @@ def extract_snapshot(
     document_path = Path(path)
     package = OoxmlPackage.open(document_path)
     body = _story_nodes(package, profile)
+    body.extend(_note_nodes(package, profile, "footnote", len(body)))
+    body.extend(_note_nodes(package, profile, "endnote", len(body)))
     headers = _section_story_nodes(package, profile, "header")
     footers = _section_story_nodes(package, profile, "footer")
     _assign_ids([body, headers, footers])

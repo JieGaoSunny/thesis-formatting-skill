@@ -81,13 +81,22 @@ def _add_image_relationship(path: Path, media: bytes = b"same-image") -> None:
 
 
 def _snapshot(nodes: list[dict[str, object]]) -> dict[str, object]:
+    return _snapshot_stories(body=nodes)
+
+
+def _snapshot_stories(
+    *,
+    body: list[dict[str, object]] | None = None,
+    headers: list[dict[str, object]] | None = None,
+    footers: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     return {
         "schema_version": "1.0",
         "snapshot_id": "0" * 16,
         "document_sha256": "a" * 64,
-        "body": nodes,
-        "headers": [],
-        "footers": [],
+        "body": body or [],
+        "headers": headers or [],
+        "footers": footers or [],
     }
 
 
@@ -161,6 +170,7 @@ def test_extracts_fields_tables_references_headers_footers_and_empty_cells(
         if node["node_type"] == "paragraph"
     ]
     assert texts[:5] == ["目录", "苹果树", "结果见。", "参考文献", "Apple Research Group."]
+    assert snapshot["body"][1]["node_type"] == "caption"
     cells = [node["normalized_text"] for node in snapshot["body"] if node["node_type"] == "table"]
     assert cells == ["A", "", "C", "D"]
     assert [node["normalized_text"] for node in snapshot["headers"]] == ["Header One"]
@@ -235,7 +245,7 @@ def test_duplicate_paragraphs_and_section_stories_remain_distinct(
 
 def test_compare_allows_only_declared_caption_move_adjacent_to_same_object() -> None:
     object_hash = "b" * 64
-    caption = _node("c" * 16, "Apple tree", 0)
+    caption = _node("c" * 16, "Apple tree", 0, node_type="caption")
     image = _node(
         "d" * 16,
         "Apple tree image",
@@ -256,15 +266,199 @@ def test_compare_allows_only_declared_caption_move_adjacent_to_same_object() -> 
         after,
         changes=[
             {
-                "rule_id": "FIGURE.CAPTION_POSITION",
+                "rule_id": "FIGURE.CAPTION.POSITION",
                 "operation": "move_caption",
                 "status": "applied",
+                "node_id": caption["node_id"],
+                "relationship_sha256": object_hash,
             }
         ],
     )
 
     assert comparison["equivalent"] is True
     assert comparison["differences"] == []
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {
+            "rule_id": "FIGURE.CAPTION.POSITION",
+            "operation": "move_caption",
+            "status": "applied",
+            "relationship_sha256": "b" * 64,
+        },
+        {
+            "rule_id": "FIGURE.CAPTION.POSITION",
+            "operation": "move_caption",
+            "status": "applied",
+            "node_id": "e" * 16,
+            "relationship_sha256": "b" * 64,
+        },
+        {
+            "rule_id": "FIGURE.CAPTION.POSITION",
+            "operation": "move_caption",
+            "status": "applied",
+            "node_id": "c" * 16,
+            "relationship_sha256": "f" * 64,
+        },
+        {
+            "rule_id": "FIGURE.UNRELATED",
+            "operation": "move_caption",
+            "status": "applied",
+            "node_id": "c" * 16,
+            "relationship_sha256": "b" * 64,
+        },
+    ],
+)
+def test_compare_rejects_caption_move_without_exact_transformation_binding(
+    change: dict[str, object],
+) -> None:
+    object_hash = "b" * 64
+    caption = _node("c" * 16, "Apple tree", 0, node_type="caption")
+    image = _node(
+        "d" * 16,
+        "Apple tree image",
+        1,
+        node_type="image",
+        relationship_hash=object_hash,
+    )
+    after = [
+        {**image, "source_location": {**image["source_location"], "index": 0}},
+        {**caption, "source_location": {**caption["source_location"], "index": 1}},
+    ]
+
+    comparison = compare_snapshots(
+        _snapshot([caption, image]),
+        _snapshot(after),
+        changes=[change],
+    )
+
+    assert comparison["equivalent"] is False
+    assert {difference["kind"] for difference in comparison["differences"]} == {
+        "reordered"
+    }
+
+
+def test_compare_rejects_caption_exemption_for_paragraph_or_nonadjacent_object() -> None:
+    object_hash = "b" * 64
+    paragraph = _node("c" * 16, "Apple tree", 0)
+    image = _node(
+        "d" * 16,
+        "Apple tree image",
+        1,
+        node_type="image",
+        relationship_hash=object_hash,
+    )
+    spacer = _node("e" * 16, "Unrelated prose", 2)
+    change = {
+        "rule_id": "FIGURE.CAPTION.POSITION",
+        "operation": "move_caption",
+        "status": "applied",
+        "node_id": paragraph["node_id"],
+        "relationship_sha256": object_hash,
+    }
+
+    paragraph_comparison = compare_snapshots(
+        _snapshot([paragraph, image]),
+        _snapshot(
+            [
+                {**image, "source_location": {**image["source_location"], "index": 0}},
+                {**paragraph, "source_location": {**paragraph["source_location"], "index": 1}},
+            ]
+        ),
+        changes=[change],
+    )
+    caption = {**paragraph, "node_type": "caption"}
+    nonadjacent_comparison = compare_snapshots(
+        _snapshot([caption, spacer, image]),
+        _snapshot(
+            [
+                {**image, "source_location": {**image["source_location"], "index": 0}},
+                spacer,
+                {**caption, "source_location": {**caption["source_location"], "index": 2}},
+            ]
+        ),
+        changes=[change],
+    )
+
+    assert paragraph_comparison["equivalent"] is False
+    assert nonadjacent_comparison["equivalent"] is False
+
+
+def test_extracts_notes_and_equations_deterministically(tmp_path: Path) -> None:
+    document = Document()
+    document.add_paragraph("Body")
+    path = _save(document, tmp_path / "notes-and-equations.docx")
+    replacement = path.with_suffix(".replacement.docx")
+    math = (
+        b'<w:p><m:oMathPara xmlns:m="http://schemas.openxmlformats.org/'
+        b'officeDocument/2006/math"><m:oMath><m:r><m:t>x + 1</m:t></m:r>'
+        b"</m:oMath></m:oMathPara></w:p>"
+    )
+    footnotes = (
+        b'<w:footnotes xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main"><w:footnote w:id="-1"><w:p><w:r>'
+        b"<w:t>separator</w:t></w:r></w:p></w:footnote>"
+        b'<w:footnote w:id="2"><w:p><w:r><w:t>Second note</w:t></w:r></w:p>'
+        b'</w:footnote><w:footnote w:id="1"><w:p><w:r><w:t>First note</w:t>'
+        b"</w:r></w:p></w:footnote></w:footnotes>"
+    )
+    endnotes = (
+        b'<w:endnotes xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main"><w:endnote w:id="3"><w:p><w:r>'
+        b"<w:t>End note</w:t></w:r></w:p></w:endnote></w:endnotes>"
+    )
+    with ZipFile(path) as source, ZipFile(
+        replacement, "w", compression=ZIP_DEFLATED
+    ) as target:
+        for info in source.infolist():
+            data = source.read(info.filename)
+            if info.filename == "word/document.xml":
+                data = data.replace(b"<w:sectPr", math + b"<w:sectPr", 1)
+            target.writestr(info, data)
+        target.writestr("word/footnotes.xml", footnotes)
+        target.writestr("word/endnotes.xml", endnotes)
+    replacement.replace(path)
+
+    first = extract_snapshot(path, PROFILE)
+    second = extract_snapshot(path, PROFILE)
+
+    assert first == second
+    assert [
+        (node["node_type"], node["normalized_text"])
+        for node in first["body"]
+    ] == [
+        ("paragraph", "Body"),
+        ("equation", "x + 1"),
+        ("footnote", "First note"),
+        ("footnote", "Second note"),
+        ("endnote", "End note"),
+    ]
+
+
+def test_compare_treats_body_to_header_move_as_remove_and_add() -> None:
+    body_node = _node("1" * 16, "Moved text", 0)
+    header_node = {
+        **body_node,
+        "node_type": "header",
+        "source_location": {
+            "part": "word/header1.xml",
+            "path": "/w:hdr/w:p[1]",
+            "index": 0,
+        },
+    }
+
+    comparison = compare_snapshots(
+        _snapshot_stories(body=[body_node]),
+        _snapshot_stories(headers=[header_node]),
+    )
+
+    assert comparison["equivalent"] is False
+    assert [difference["kind"] for difference in comparison["differences"]] == [
+        "removed",
+        "added",
+    ]
 
 
 def test_compare_rejects_prose_change_and_reports_explicit_kinds() -> None:
