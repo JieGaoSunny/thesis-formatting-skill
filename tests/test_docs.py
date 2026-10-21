@@ -271,6 +271,7 @@ def test_ci_is_pinned_reproducible_and_public_safe() -> None:
     assert f"docker pull {CANONICAL_IMAGE}" in text
     assert CANONICAL_IMAGE in text
     assert "tests/test_render.py tests/test_demo_e2e.py" in text
+    assert 'sudo chown -R "$(id -u):$(id -g)" .venv ci-reports' in text
     assert "tests/fixtures/privacy/synthetic-denylist.txt" in text
     assert re.search(r"release-check examples\s+\\", text)
     assert "release-check examples/after.docx" not in text

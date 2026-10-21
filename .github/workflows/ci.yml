@@ -54,6 +54,7 @@ jobs:
 
       - name: Run render and demo integration in container
         run: |
+          set +e
           docker run --rm \
             --entrypoint bash \
             -v "$PWD:/workspace" \
@@ -67,6 +68,10 @@ jobs:
               uv run thesis-format format examples/before.docx --profile rules/apple-university.yaml --output ci-reports/acceptance-release/after.docx --report ci-reports/acceptance-release/transformation.json &&
               THESIS_RENDER_MODE=local uv run thesis-format export ci-reports/acceptance-release/after.docx --output ci-reports/acceptance-release/after.pdf --manifest ci-reports/acceptance-release/render-manifest.json --allow-noncanonical &&
               uv run thesis-format preview ci-reports/acceptance-release/after.pdf --manifest ci-reports/acceptance-release/render-manifest.json --output-dir ci-reports/acceptance-release/previews'
+          status=$?
+          set -e
+          sudo chown -R "$(id -u):$(id -g)" .venv ci-reports
+          exit "$status"
 
       - name: Privacy-scan generated acceptance release
         run: |
