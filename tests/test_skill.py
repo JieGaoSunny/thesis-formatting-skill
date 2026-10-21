@@ -13,6 +13,14 @@ SKILL_PATHS = (
     ROOT / ".claude" / "skills" / "thesis-formatting" / "SKILL.md",
     ROOT / ".github" / "skills" / "thesis-formatting" / "SKILL.md",
 )
+CANONICAL_IMAGE_DIGEST = (
+    "sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb"
+)
+CANONICAL_IMAGE_REFERENCE = (
+    "ghcr.io/jiegaosunny/thesis-formatting-skill-render@"
+    f"{CANONICAL_IMAGE_DIGEST}"
+)
+CANONICAL_SOURCE_COMMIT = "376522bd916034585ac0bf582ae623ee529c4d56"
 
 
 def _skill() -> str:
@@ -92,6 +100,10 @@ def test_skill_has_exact_commands_quick_reference_and_pressure_red_flags() -> No
     ) in text
     assert "canonical_image_reference" in text
     assert "canonical_image_digest" in text
+    assert "published-pinned" in text
+    assert CANONICAL_IMAGE_REFERENCE in text
+    assert CANONICAL_IMAGE_DIGEST in text
+    assert CANONICAL_SOURCE_COMMIT in text
     assert '-v "$PWD:/workspace"' in text
     assert "--entrypoint" not in text
     assert (

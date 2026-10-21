@@ -131,9 +131,15 @@ uv run --frozen pytest
 中运行渲染测试和端到端演示测试。
 
 规范启动器从 [`render-environment.json`](render-environment.json) 读取精确且不可变的
-镜像固定值。源码变更后，`canonical_container_status` 会设为 `pending-rebuild`，
-并删除 `canonical_image_reference` 与 `canonical_image_digest`；必须在重建、发布并
-重新固定镜像后才能进行规范渲染。
+镜像固定值。规范源码提交
+`376522bd916034585ac0bf582ae623ee529c4d56` 的
+`canonical_container_status` 为 `published-pinned`；
+`canonical_image_reference` 固定为
+`ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb`，
+`canonical_image_digest` 固定为
+`sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb`。
+后续源码变更必须把状态恢复为 `pending-rebuild`，并删除两个镜像固定字段，直到替代
+镜像完成构建、发布和重新固定。
 
 ```bash
 CANONICAL_IMAGE="$(python -c 'import json; print(json.load(open("render-environment.json"))["canonical_image_reference"])')"

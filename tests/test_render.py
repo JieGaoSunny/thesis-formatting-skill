@@ -28,6 +28,14 @@ from thesis_format import render
 ROOT = Path(__file__).parents[1]
 BASELINE = ROOT / "tests" / "fixtures" / "render" / "baseline.json"
 SOFFICE = Path("/opt/homebrew/bin/soffice")
+PINNED_CANONICAL_IMAGE_DIGEST = (
+    "sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb"
+)
+PINNED_CANONICAL_IMAGE_REFERENCE = (
+    "ghcr.io/jiegaosunny/thesis-formatting-skill-render@"
+    f"{PINNED_CANONICAL_IMAGE_DIGEST}"
+)
+PINNED_CANONICAL_SOURCE_COMMIT = "376522bd916034585ac0bf582ae623ee529c4d56"
 CANONICAL_IMAGE_DIGEST = (
     "sha256:" + "a" * 64
 )
@@ -53,6 +61,24 @@ FONT_OBSERVATIONS = [
         "file": "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
     },
 ]
+
+
+def test_render_environment_pins_published_canonical_image() -> None:
+    environment = json.loads(
+        (ROOT / "render-environment.json").read_text(encoding="utf-8")
+    )
+
+    assert environment["canonical_container_status"] == "published-pinned"
+    assert (
+        environment["canonical_source_commit"] == PINNED_CANONICAL_SOURCE_COMMIT
+    )
+    assert (
+        environment["canonical_image_reference"]
+        == PINNED_CANONICAL_IMAGE_REFERENCE
+    )
+    assert (
+        environment["canonical_image_digest"] == PINNED_CANONICAL_IMAGE_DIGEST
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -437,7 +463,7 @@ def test_explicit_local_mode_records_noncanonical_renderer_fingerprint(
         render.require_canonical_render_manifest(first)
 
 
-def test_cli_export_fails_canonical_acceptance_while_digest_is_pending(
+def test_cli_export_fails_canonical_acceptance_without_digest(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -458,11 +484,11 @@ def test_cli_export_fails_canonical_acceptance_while_digest_is_pending(
     )
 
     assert result == 2
-    assert "canonical_image_digest" in capsys.readouterr().err
+    assert "THESIS_RENDER_IMAGE_DIGEST" in capsys.readouterr().err
     assert not (tmp_path / "output.pdf").exists()
 
 
-def test_render_environment_marks_rebuild_pending_and_defines_attestation() -> None:
+def test_render_environment_publishes_pin_and_defines_attestation() -> None:
     environment = json.loads(
         (ROOT / "render-environment.json").read_text(encoding="utf-8")
     )
@@ -478,19 +504,27 @@ def test_render_environment_marks_rebuild_pending_and_defines_attestation() -> N
     assert environment["renderer"]["local_detected_version"].startswith(
         "LibreOffice "
     )
-    assert environment["canonical_container_status"] == "pending-rebuild"
-    assert "canonical_image_digest" not in environment
-    assert "canonical_image_reference" not in environment
-    assert environment["canonical_source_commit"] == "CURRENT_COMMIT"
+    assert environment["canonical_container_status"] == "published-pinned"
+    assert (
+        environment["canonical_image_digest"] == PINNED_CANONICAL_IMAGE_DIGEST
+    )
+    assert (
+        environment["canonical_image_reference"]
+        == PINNED_CANONICAL_IMAGE_REFERENCE
+    )
+    assert (
+        environment["canonical_source_commit"] == PINNED_CANONICAL_SOURCE_COMMIT
+    )
     assert environment["canonical_build_inputs"] == {
         "debian_snapshot": DEBIAN_SNAPSHOT,
         "font_queries": FONT_QUERIES,
     }
-    assert "pending rebuild and immutable digest pin" in environment[
-        "release_ci_instructions"
-    ]
-    assert CANONICAL_IMAGE_REFERENCE not in readme
-    assert CANONICAL_IMAGE_REFERENCE not in readme_zh
+    instructions = environment["release_ci_instructions"]
+    assert PINNED_CANONICAL_IMAGE_REFERENCE in instructions
+    assert PINNED_CANONICAL_IMAGE_DIGEST in instructions
+    assert PINNED_CANONICAL_SOURCE_COMMIT in instructions
+    assert PINNED_CANONICAL_IMAGE_REFERENCE in readme
+    assert PINNED_CANONICAL_IMAGE_REFERENCE in readme_zh
     assert (
         "python:3.12.11-slim-bookworm@sha256:"
         "519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7"

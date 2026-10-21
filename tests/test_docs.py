@@ -9,6 +9,14 @@ import yaml
 
 ROOT = Path(__file__).parents[1]
 READMES = (ROOT / "README.md", ROOT / "README.zh-CN.md")
+CANONICAL_IMAGE_DIGEST = (
+    "sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb"
+)
+CANONICAL_IMAGE_REFERENCE = (
+    "ghcr.io/jiegaosunny/thesis-formatting-skill-render@"
+    f"{CANONICAL_IMAGE_DIGEST}"
+)
+CANONICAL_SOURCE_COMMIT = "376522bd916034585ac0bf582ae623ee529c4d56"
 COMMANDS = (
     "uv run thesis-format audit examples/before.docx "
     "--profile rules/apple-university.yaml "
@@ -88,6 +96,10 @@ def test_readmes_are_complete_bilingual_equivalents() -> None:
             assert f"examples/screenshots/after/demo_{screenshot}-" in text
         assert "canonical_container_status" in text
         assert "canonical_image_reference" in text
+        assert "published-pinned" in text
+        assert CANONICAL_IMAGE_REFERENCE in text
+        assert CANONICAL_IMAGE_DIGEST in text
+        assert CANONICAL_SOURCE_COMMIT in text
         assert ".claude/skills/thesis-formatting/SKILL.md" in text
         assert ".github/skills/thesis-formatting/SKILL.md" in text
 
@@ -268,6 +280,8 @@ def test_ci_is_pinned_reproducible_and_public_safe() -> None:
     assert "Resolve canonical image pin" in text
     assert "canonical_image_reference" in text
     assert "canonical_image_digest" in text
+    assert f"CANONICAL_IMAGE: {CANONICAL_IMAGE_REFERENCE}" in text
+    assert f"CANONICAL_IMAGE_DIGEST: {CANONICAL_IMAGE_DIGEST}" in text
     assert "--entrypoint" not in text
     assert "THESIS_RENDER_MODE" not in text
     assert "--allow-noncanonical" not in text

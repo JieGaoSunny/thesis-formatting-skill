@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+env:
+  CANONICAL_IMAGE: ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb
+  CANONICAL_IMAGE_DIGEST: sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -77,6 +81,12 @@ jobs:
               Path("render-environment.json").read_text(encoding="utf-8")
           )
           available = environment.get("canonical_container_status") == "published-pinned"
+          if not available:
+              raise SystemExit("canonical image is not published-pinned")
+          if environment.get("canonical_image_reference") != os.environ["CANONICAL_IMAGE"]:
+              raise SystemExit("CI canonical image does not match render-environment.json")
+          if environment.get("canonical_image_digest") != os.environ["CANONICAL_IMAGE_DIGEST"]:
+              raise SystemExit("CI canonical digest does not match render-environment.json")
           output = Path(os.environ["GITHUB_OUTPUT"])
           with output.open("a", encoding="utf-8") as stream:
               stream.write(f"available={'true' if available else 'false'}\n")

@@ -33,9 +33,15 @@ uv run thesis-format release-check release-directory --profile rules/apple-unive
 The Docker commands deliberately use the image's `/app` entrypoint: they mount
 only the current workspace at `/workspace`, do not replace `/app`, and obtain
 the exact immutable image reference and digest from the external repository
-`render-environment.json` pin. If its `canonical_container_status` is
-`pending-rebuild`, canonical publication is blocked until the image is rebuilt
-and those two pin fields are populated.
+`render-environment.json` pin. Its `canonical_container_status` is
+`published-pinned` for source commit
+`376522bd916034585ac0bf582ae623ee529c4d56`, image reference
+`ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb`,
+and image digest
+`sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb`.
+If a later source change sets the status to `pending-rebuild`, canonical
+publication is blocked until the replacement image is rebuilt and both pin
+fields are populated.
 
 ## Quick Reference
 

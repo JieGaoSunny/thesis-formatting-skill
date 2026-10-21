@@ -142,10 +142,15 @@ documentation links, runs unit tests outside the container, then runs render
 and end-to-end demo tests inside the canonical image.
 
 The canonical launcher reads the exact immutable pin from
-[`render-environment.json`](render-environment.json). A source change sets
-`canonical_container_status` to `pending-rebuild` and removes
-`canonical_image_reference` and `canonical_image_digest`; canonical rendering
-remains blocked until the rebuilt image is published and repinned.
+[`render-environment.json`](render-environment.json). Its
+`canonical_container_status` is `published-pinned` for canonical source commit
+`376522bd916034585ac0bf582ae623ee529c4d56`, with
+`canonical_image_reference` pinned to
+`ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb`
+and `canonical_image_digest` pinned to
+`sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb`.
+A later source change must return the status to `pending-rebuild` and remove
+both image pin fields until its replacement image is published and repinned.
 
 ```bash
 CANONICAL_IMAGE="$(python -c 'import json; print(json.load(open("render-environment.json"))["canonical_image_reference"])')"

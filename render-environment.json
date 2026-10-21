@@ -11,8 +11,8 @@
     "local_detected_version": "LibreOffice 26.8.1.1 bf6ef2662401c7d6dce671ab4deb26ee0af3a7c1"
   },
   "render_mode": "canonical",
-  "canonical_container_status": "pending-rebuild",
-  "canonical_source_commit": "CURRENT_COMMIT",
+  "canonical_container_status": "published-pinned",
+  "canonical_source_commit": "376522bd916034585ac0bf582ae623ee529c4d56",
   "canonical_build_inputs": {
     "debian_snapshot": "20250203T000000Z",
     "font_queries": [
@@ -20,6 +20,8 @@
       "Noto Serif CJK SC"
     ]
   },
+  "canonical_image_reference": "ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb",
+  "canonical_image_digest": "sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb",
   "locale": "zh_CN.UTF-8",
   "timezone": "UTC",
   "soffice_path": "soffice",
@@ -31,5 +33,5 @@
     "locale_observed": "C.UTF-8",
     "verified_at": "2026-10-21T02:39:47+08:00"
   },
-  "release_ci_instructions": "Canonical rendering is blocked pending rebuild and immutable digest pin. Replace CURRENT_COMMIT with the image source commit and add canonical_image_reference plus canonical_image_digest after publication."
+  "release_ci_instructions": "Run ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb with THESIS_RENDER_IMAGE_DIGEST=sha256:e2599328bedaafe9f2929e091f31359444c9ebefc84acebc14d55773fedc77bb. The image marker source commit is 376522bd916034585ac0bf582ae623ee529c4d56."
 }
