@@ -263,6 +263,11 @@ def test_ci_is_pinned_reproducible_and_public_safe() -> None:
         workflow.get("on", workflow.get(True))
     )
     assert re.search(r"uv run --frozen pytest .*?-m [\"']not integration[\"']", text)
+    font_install = (
+        "sudo apt-get install -y --no-install-recommends fonts-noto-cjk"
+    )
+    assert font_install in text
+    assert text.index(font_install) < text.index("- name: Run unit tests")
     assert f"docker pull {CANONICAL_IMAGE}" in text
     assert CANONICAL_IMAGE in text
     assert "tests/test_render.py tests/test_demo_e2e.py" in text

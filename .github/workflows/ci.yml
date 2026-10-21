@@ -28,6 +28,11 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --frozen --all-extras
 
+      - name: Install CJK figure font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+
       - name: Run unit tests
         run: |
           mkdir -p ci-reports
