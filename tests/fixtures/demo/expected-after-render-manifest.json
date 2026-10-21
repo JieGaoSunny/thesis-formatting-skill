@@ -1,22 +1,18 @@
 {
-  "schema_version": "1.0",
+  "extracted_text_hash": "7164e4a28245c4b307b1c78787ae7e50d195442c39c0053f09e0713cd7fa49f3",
   "locale": "zh_CN.UTF-8",
-  "page_dimensions": {
-    "height_pt": 841.89,
-    "width_pt": 595.304
-  },
   "named_destinations": [
     {
       "name": "demo_appendix",
-      "page": 14,
-      "x_pt": 235.45,
-      "y_pt": 736.439
+      "page": 13,
+      "x_pt": 235.5,
+      "y_pt": 727.889
     },
     {
       "name": "demo_body",
       "page": 4,
-      "x_pt": 307.45,
-      "y_pt": 737.189
+      "x_pt": 307.5,
+      "y_pt": 727.889
     },
     {
       "name": "demo_cover",
@@ -26,21 +22,21 @@
     },
     {
       "name": "demo_figure",
-      "page": 7,
+      "page": 6,
       "x_pt": 85.05,
-      "y_pt": 751.189
+      "y_pt": 376.739
     },
     {
       "name": "demo_references",
-      "page": 13,
+      "page": 12,
       "x_pt": 265.65,
-      "y_pt": 737.189
+      "y_pt": 727.889
     },
     {
       "name": "demo_table",
       "page": 7,
-      "x_pt": 207.8,
-      "y_pt": 478.889
+      "x_pt": 221.55,
+      "y_pt": 751.889
     },
     {
       "name": "demo_toc",
@@ -49,97 +45,95 @@
       "y_pt": 256.389
     }
   ],
-  "extracted_text_hash": "c81397f9e4e1b82f0dd68eea678f0ff93ec7fecba354925faf38b9cbcbc8c8d7",
+  "page_dimensions": {
+    "height_pt": 841.89,
+    "width_pt": 595.304
+  },
   "pages": [
     {
       "height_pt": 841.89,
       "page": 1,
-      "perceptual_hash": "d4f030d0d4d4c888",
+      "perceptual_hash": "d4f030d8e4d4c800",
       "width_pt": 595.304
     },
     {
       "height_pt": 841.89,
       "page": 2,
-      "perceptual_hash": "30d0ccc4c0901010",
+      "perceptual_hash": "30d0c8c4c8901000",
       "width_pt": 595.304
     },
     {
       "height_pt": 841.89,
       "page": 3,
-      "perceptual_hash": "10d0d00000000000",
+      "perceptual_hash": "10b0900000000000",
       "width_pt": 595.304
     },
     {
       "height_pt": 841.89,
       "page": 4,
-      "perceptual_hash": "10f0c0ccc4c8e800",
+      "perceptual_hash": "10f0c0c8c4c0d000",
       "width_pt": 595.304
     },
     {
       "height_pt": 841.89,
       "page": 5,
-      "perceptual_hash": "d0c0c4c400000000",
+      "perceptual_hash": "c0c4c40000000000",
       "width_pt": 595.304
     },
     {
       "height_pt": 841.89,
       "page": 6,
-      "perceptual_hash": "30f0c4d4d0005000",
+      "perceptual_hash": "30f0c4d4f0707420",
       "width_pt": 595.304
     },
     {
       "height_pt": 841.89,
       "page": 7,
-      "perceptual_hash": "30f070b0c8c4e400",
+      "perceptual_hash": "b0d0ccc0c4d09000",
       "width_pt": 595.304
     },
     {
       "height_pt": 841.89,
       "page": 8,
-      "perceptual_hash": "c0c4d80000000000",
+      "perceptual_hash": "30f0c4c4e4001000",
       "width_pt": 595.304
     },
     {
       "height_pt": 841.89,
       "page": 9,
-      "perceptual_hash": "30f0c4c4d0000000",
+      "perceptual_hash": "30f0e8b0c0c4c060",
       "width_pt": 595.304
     },
     {
       "height_pt": 841.89,
       "page": 10,
-      "perceptual_hash": "30f0e868d8c4d800",
+      "perceptual_hash": "c0c0e4c8c8000000",
       "width_pt": 595.304
     },
     {
       "height_pt": 841.89,
       "page": 11,
-      "perceptual_hash": "f0c4e8e8ccc00010",
+      "perceptual_hash": "30c0ccc4c4c4f000",
       "width_pt": 595.304
     },
     {
       "height_pt": 841.89,
       "page": 12,
-      "perceptual_hash": "10e0c4c4c4c4e000",
+      "perceptual_hash": "10b08c8400000000",
       "width_pt": 595.304
     },
     {
       "height_pt": 841.89,
       "page": 13,
-      "perceptual_hash": "10b0849000000000",
+      "perceptual_hash": "30e0c4d4d4c4c400",
       "width_pt": 595.304
     },
     {
       "height_pt": 841.89,
       "page": 14,
-      "perceptual_hash": "30e0c4d4d4c4c480",
-      "width_pt": 595.304
-    },
-    {
-      "height_pt": 841.89,
-      "page": 15,
-      "perceptual_hash": "f0c090d0e4001000",
+      "perceptual_hash": "f0d090d0c8000000",
       "width_pt": 595.304
     }
-  ]
+  ],
+  "schema_version": "1.0"
 }

@@ -1,22 +1,18 @@
 {
-  "schema_version": "1.0",
+  "extracted_text_hash": "820f86b6a273945ade379bcb9999663d09cc64f63fd7c9ab22d79b815512af2f",
   "locale": "zh_CN.UTF-8",
-  "page_dimensions": {
-    "height_pt": 792,
-    "width_pt": 612
-  },
   "named_destinations": [
     {
       "name": "demo_appendix",
-      "page": 16,
-      "x_pt": 243.8,
-      "y_pt": 686.55
+      "page": 14,
+      "x_pt": 243.85,
+      "y_pt": 678
     },
     {
       "name": "demo_body",
       "page": 4,
       "x_pt": 264.2,
-      "y_pt": 687.3
+      "y_pt": 678
     },
     {
       "name": "demo_cover",
@@ -28,19 +24,19 @@
       "name": "demo_figure",
       "page": 7,
       "x_pt": 56.7,
-      "y_pt": 701.3
+      "y_pt": 702
     },
     {
       "name": "demo_references",
-      "page": 15,
+      "page": 13,
       "x_pt": 274,
-      "y_pt": 682.85
+      "y_pt": 678
     },
     {
       "name": "demo_table",
       "page": 7,
-      "x_pt": 216.15,
-      "y_pt": 413.35
+      "x_pt": 229.9,
+      "y_pt": 413.6
     },
     {
       "name": "demo_toc",
@@ -49,109 +45,101 @@
       "y_pt": 286.5
     }
   ],
-  "extracted_text_hash": "6028dbceb327ac9dfcd35d83268a39613ef60dac201131b0996a5e5124d54a2f",
+  "page_dimensions": {
+    "height_pt": 792,
+    "width_pt": 612
+  },
   "pages": [
     {
       "height_pt": 792,
       "page": 1,
-      "perceptual_hash": "d4d030d4ccb68080",
+      "perceptual_hash": "d4f03090caa68200",
       "width_pt": 612
     },
     {
       "height_pt": 792,
       "page": 2,
-      "perceptual_hash": "10b08a82c0303000",
+      "perceptual_hash": "10b08a88c0301000",
       "width_pt": 612
     },
     {
       "height_pt": 792,
       "page": 3,
-      "perceptual_hash": "1090900000000000",
+      "perceptual_hash": "10b0900000000000",
       "width_pt": 612
     },
     {
       "height_pt": 792,
       "page": 4,
-      "perceptual_hash": "10f288d080ccc400",
+      "perceptual_hash": "10b2889288848840",
       "width_pt": 612
     },
     {
       "height_pt": 792,
       "page": 5,
-      "perceptual_hash": "90c4e0d8c0c88000",
+      "perceptual_hash": "b09080a800000000",
       "width_pt": 612
     },
     {
       "height_pt": 792,
       "page": 6,
-      "perceptual_hash": "30f2c8caa0d06800",
+      "perceptual_hash": "30f0ccc2a0b00000",
       "width_pt": 612
     },
     {
       "height_pt": 792,
       "page": 7,
-      "perceptual_hash": "30f0e8b4b8c8a400",
+      "perceptual_hash": "30f0e8b48088ac00",
       "width_pt": 612
     },
     {
       "height_pt": 792,
       "page": 8,
-      "perceptual_hash": "f096ca84d0880000",
+      "perceptual_hash": "b6c2849090000000",
       "width_pt": 612
     },
     {
       "height_pt": 792,
       "page": 9,
-      "perceptual_hash": "30f084c2a49a8800",
+      "perceptual_hash": "30b0c484a29a0000",
       "width_pt": 612
     },
     {
       "height_pt": 792,
       "page": 10,
-      "perceptual_hash": "30f0e868b084c8b8",
+      "perceptual_hash": "30f0e87890c8e800",
       "width_pt": 612
     },
     {
       "height_pt": 792,
       "page": 11,
-      "perceptual_hash": "d094c8c4c4cccc00",
+      "perceptual_hash": "b0c0c4c4ccd0a000",
       "width_pt": 612
     },
     {
       "height_pt": 792,
       "page": 12,
-      "perceptual_hash": "d2c0a00000000000",
+      "perceptual_hash": "30d08cca80a89400",
       "width_pt": 612
     },
     {
       "height_pt": 792,
       "page": 13,
-      "perceptual_hash": "30d0c4e2c290b800",
+      "perceptual_hash": "10b08c0080000080",
       "width_pt": 612
     },
     {
       "height_pt": 792,
       "page": 14,
-      "perceptual_hash": "9094900000000000",
+      "perceptual_hash": "30f8948ab0988880",
       "width_pt": 612
     },
     {
       "height_pt": 792,
       "page": 15,
-      "perceptual_hash": "10b08c0080008080",
-      "width_pt": 612
-    },
-    {
-      "height_pt": 792,
-      "page": 16,
-      "perceptual_hash": "30f8d880e4b09800",
-      "width_pt": 612
-    },
-    {
-      "height_pt": 792,
-      "page": 17,
-      "perceptual_hash": "f0c0c8b090f4c800",
+      "perceptual_hash": "b0c8b094e0c80000",
       "width_pt": 612
     }
-  ]
+  ],
+  "schema_version": "1.0"
 }

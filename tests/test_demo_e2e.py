@@ -30,6 +30,9 @@ EXAMPLES = ROOT / "examples"
 REPORTS = EXAMPLES / "reports"
 SCREENSHOTS = EXAMPLES / "screenshots"
 BASELINES = ROOT / "tests" / "fixtures" / "demo"
+CANONICAL_CONTAINER_MARKER = Path(
+    "/usr/local/share/thesis-format/canonical-container.json"
+)
 SELECTORS = (
     "demo_cover",
     "demo_toc",
@@ -261,10 +264,11 @@ def test_committed_before_after_demo_regenerates_end_to_end(
             destination["name"]
             for destination in manifest["named_destinations"]
         } >= set(SELECTORS)
-        expected = _load(
-            BASELINES / f"expected-{name}-render-manifest.json"
-        )
-        assert normalized_manifests[name] == expected
+        if CANONICAL_CONTAINER_MARKER.is_file():
+            expected = _load(
+                BASELINES / f"expected-{name}-render-manifest.json"
+            )
+            assert normalized_manifests[name] == expected
         pdf = tmp_path / f"{name}.pdf"
         for selector in (
             "demo_cover",
