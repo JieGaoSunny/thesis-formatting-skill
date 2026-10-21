@@ -242,8 +242,9 @@ def test_committed_before_after_demo_regenerates_end_to_end(
         name: _normalized_render_manifest(manifest)
         for name, manifest in manifests.items()
     }
-    if os.environ.get("CI"):
-        (ROOT / "ci-reports" / "generated-render-baselines.json").write_text(
+    ci_reports = ROOT / "ci-reports"
+    if ci_reports.is_dir():
+        (ci_reports / "generated-render-baselines.json").write_text(
             json.dumps(
                 normalized_manifests,
                 ensure_ascii=False,
