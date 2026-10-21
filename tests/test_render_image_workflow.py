@@ -21,11 +21,20 @@ def test_render_image_workflow_publishes_digest_reference() -> None:
     assert job["runs-on"] == "ubuntu-latest"
     steps = job["steps"]
 
-    assert steps[0]["uses"] == "actions/checkout@v4"
-    assert steps[1]["uses"] == "docker/setup-buildx-action@v3"
+    assert (
+        steps[0]["uses"]
+        == "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
+    )
+    assert (
+        steps[1]["uses"]
+        == "docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435"
+    )
 
     login = steps[2]
-    assert login["uses"] == "docker/login-action@v3"
+    assert (
+        login["uses"]
+        == "docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1"
+    )
     assert login["with"] == {
         "registry": "ghcr.io",
         "username": "${{ github.actor }}",
@@ -34,7 +43,10 @@ def test_render_image_workflow_publishes_digest_reference() -> None:
 
     build = steps[3]
     assert build["id"] == "build"
-    assert build["uses"] == "docker/build-push-action@v6"
+    assert (
+        build["uses"]
+        == "docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83"
+    )
     assert build["with"] == {
         "context": ".",
         "file": "./Dockerfile.render",
@@ -53,7 +65,10 @@ def test_render_image_workflow_publishes_digest_reference() -> None:
     )
 
     upload = steps[5]
-    assert upload["uses"] == "actions/upload-artifact@v4"
+    assert (
+        upload["uses"]
+        == "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+    )
     assert upload["with"] == {
         "name": "render-image-reference",
         "path": "image-reference.txt",
