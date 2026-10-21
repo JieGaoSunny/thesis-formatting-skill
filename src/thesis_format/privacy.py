@@ -82,77 +82,38 @@ _SKIPPED_DIRECTORIES = {".git", ".hg", ".svn", "__pycache__", ".pytest_cache"}
 _WORDPROCESSINGML_NAMESPACE = (
     "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 )
-_PACKAGE_RELATIONSHIPS_NAMESPACE = (
-    "http://schemas.openxmlformats.org/package/2006/relationships"
-)
-_CONTENT_TYPES_NAMESPACE = (
-    "http://schemas.openxmlformats.org/package/2006/content-types"
-)
 _XML_SCHEMA_INSTANCE_NAMESPACE = "http://www.w3.org/2001/XMLSchema-instance"
 _MARKUP_COMPATIBILITY_NAMESPACE = (
     "http://schemas.openxmlformats.org/markup-compatibility/2006"
 )
-_DRAWINGML_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/main"
-_WORDPROCESSINGML_2010_NAMESPACE = (
-    "http://schemas.microsoft.com/office/word/2010/wordml"
+_STANDARD_OOXML_NAMESPACE_PREFIXES = (
+    "http://schemas.openxmlformats.org/",
+    "https://schemas.openxmlformats.org/",
+    "http://purl.oclc.org/ooxml/",
+    "https://purl.oclc.org/ooxml/",
+    "http://schemas.microsoft.com/office/",
+    "https://schemas.microsoft.com/office/",
 )
-_STRUCTURAL_OOXML_ATTRIBUTE_QNAMES = frozenset(
+_STANDARD_XML_CONTROL_NAMESPACES = frozenset(
+    {_XML_SCHEMA_INSTANCE_NAMESPACE, _MARKUP_COMPATIBILITY_NAMESPACE}
+)
+_OOXML_USER_TEXT_ATTRIBUTE_NAMES = frozenset(
     {
-        (_XML_SCHEMA_INSTANCE_NAMESPACE, "type"),
-        (_XML_SCHEMA_INSTANCE_NAMESPACE, "nil"),
-        (_XML_SCHEMA_INSTANCE_NAMESPACE, "schemaLocation"),
-        (_XML_SCHEMA_INSTANCE_NAMESPACE, "noNamespaceSchemaLocation"),
-        (_MARKUP_COMPATIBILITY_NAMESPACE, "Ignorable"),
-        (_MARKUP_COMPATIBILITY_NAMESPACE, "MustUnderstand"),
-        (_MARKUP_COMPATIBILITY_NAMESPACE, "ProcessContent"),
-        (_MARKUP_COMPATIBILITY_NAMESPACE, "PreserveElements"),
-        (_MARKUP_COMPATIBILITY_NAMESPACE, "PreserveAttributes"),
+        "anchor",
+        "author",
+        "company",
+        "descr",
+        "href",
+        "keywords",
+        "name",
+        "subject",
+        "target",
+        "title",
+        "tooltip",
     }
 )
-_STRUCTURAL_OOXML_ATTRIBUTE_CONTEXTS = frozenset(
-    {
-        (_PACKAGE_RELATIONSHIPS_NAMESPACE, "Relationship", None, "Id"),
-        (_PACKAGE_RELATIONSHIPS_NAMESPACE, "Relationship", None, "Type"),
-        (_PACKAGE_RELATIONSHIPS_NAMESPACE, "Relationship", None, "TargetMode"),
-        (_CONTENT_TYPES_NAMESPACE, "Default", None, "Extension"),
-        (_CONTENT_TYPES_NAMESPACE, "Default", None, "ContentType"),
-        (_CONTENT_TYPES_NAMESPACE, "Override", None, "PartName"),
-        (_CONTENT_TYPES_NAMESPACE, "Override", None, "ContentType"),
-        (
-            _WORDPROCESSINGML_NAMESPACE,
-            "sectPr",
-            _WORDPROCESSINGML_NAMESPACE,
-            "rsidSect",
-        ),
-        (
-            _WORDPROCESSINGML_NAMESPACE,
-            "rsid",
-            _WORDPROCESSINGML_NAMESPACE,
-            "val",
-        ),
-        (
-            _WORDPROCESSINGML_NAMESPACE,
-            "tmpl",
-            _WORDPROCESSINGML_NAMESPACE,
-            "val",
-        ),
-        (
-            _WORDPROCESSINGML_2010_NAMESPACE,
-            "docId",
-            _WORDPROCESSINGML_2010_NAMESPACE,
-            "val",
-        ),
-        (_DRAWINGML_NAMESPACE, "lin", None, "ang"),
-        *(
-            (
-                _WORDPROCESSINGML_NAMESPACE,
-                "sig",
-                _WORDPROCESSINGML_NAMESPACE,
-                name,
-            )
-            for name in ("usb0", "usb1", "usb2", "usb3", "csb0", "csb1")
-        ),
-    }
+_OOXML_CONTROL_ATTRIBUTE_NAMES = frozenset(
+    {"cx", "cy", "height", "id", "width"}
 )
 _BUILTIN_PATTERNS = (
     (
@@ -219,6 +180,33 @@ class _Finding:
 
 def _normalized(value: str) -> str:
     return unicodedata.normalize("NFC", value.replace("\\", "/")).casefold()
+
+
+def _is_standard_ooxml_namespace(namespace: str | None) -> bool:
+    return namespace in _STANDARD_XML_CONTROL_NAMESPACES or bool(
+        namespace
+        and any(
+            namespace.startswith(prefix)
+            for prefix in _STANDARD_OOXML_NAMESPACE_PREFIXES
+        )
+    )
+
+
+def _is_ooxml_user_text_attribute(
+    element_name: etree.QName,
+    attribute_name: etree.QName,
+) -> bool:
+    localname = attribute_name.localname.casefold()
+    if (
+        localname in _OOXML_CONTROL_ATTRIBUTE_NAMES
+        or localname.startswith("dist")
+        or localname.startswith("rsid")
+    ):
+        return False
+    namespace = attribute_name.namespace or element_name.namespace
+    if not _is_standard_ooxml_namespace(namespace):
+        return True
+    return localname in _OOXML_USER_TEXT_ATTRIBUTE_NAMES
 
 
 def _sha(value: str | bytes) -> str:
@@ -798,23 +786,15 @@ class _Scanner:
                 )
                 element_name = etree.QName(element)
                 attribute_name = etree.QName(name)
-                structural_attribute = (
-                    (attribute_name.namespace, attribute_name.localname)
-                    in _STRUCTURAL_OOXML_ATTRIBUTE_QNAMES
-                    or (
-                        element_name.namespace,
-                        element_name.localname,
-                        attribute_name.namespace,
-                        attribute_name.localname,
-                    )
-                    in _STRUCTURAL_OOXML_ATTRIBUTE_CONTEXTS
-                )
                 scan_value = unquote(value) if is_relationship_target else value
                 self.scan_text(
                     scan_value,
                     path,
                     location,
-                    scan_profile_patterns=not structural_attribute,
+                    scan_profile_patterns=_is_ooxml_user_text_attribute(
+                        element_name,
+                        attribute_name,
+                    ),
                 )
 
     def scan_ooxml_metadata(

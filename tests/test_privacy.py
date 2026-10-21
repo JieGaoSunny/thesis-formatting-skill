@@ -263,14 +263,26 @@ def test_scans_uri_encoded_private_values_in_relationship_targets(
             '2006/wordprocessingDrawing" title="SecretName"/>'
         ),
         '<root custom="SecretName"/>',
+        '<root xmlns:custom="https://example.test/custom" custom:value="SecretName"/>',
         (
             '<w:hyperlink xmlns:w="http://schemas.openxmlformats.org/'
             'wordprocessingml/2006/main" w:anchor="SecretName"/>'
         ),
+        (
+            '<Relationship xmlns="http://schemas.openxmlformats.org/package/'
+            '2006/relationships" Target="SecretName"/>'
+        ),
     ],
-    ids=("descr", "title", "custom", "hyperlink"),
+    ids=(
+        "descr",
+        "title",
+        "no-namespace",
+        "custom-namespace",
+        "hyperlink",
+        "relationship-target",
+    ),
 )
-def test_profile_patterns_scan_all_non_structural_ooxml_attribute_values(
+def test_profile_patterns_scan_user_text_ooxml_attribute_values(
     tmp_path: Path,
     xml: str,
 ) -> None:
@@ -285,6 +297,54 @@ def test_profile_patterns_scan_all_non_structural_ooxml_attribute_values(
     report = release_check(document, profile, DENYLIST)
 
     assert "PRIVACY.PATTERN.SECRET_NAME" in _rules(report)
+
+
+def test_profile_patterns_do_not_scan_numeric_ooxml_layout_attributes(
+    tmp_path: Path,
+) -> None:
+    profile = _profile_with_generic_pattern(
+        tmp_path,
+        pattern_id="numeric-layout",
+        regex=r"\d+",
+    )
+    document = tmp_path / "thesis.docx"
+    _write_docx(
+        document,
+        {
+            "word/document.xml": (
+                '<wp:extent xmlns:wp="http://schemas.openxmlformats.org/'
+                'drawingml/2006/wordprocessingDrawing" cx="123" cy="456"/>'
+            )
+        },
+    )
+
+    report = release_check(document, profile, DENYLIST)
+
+    assert "PRIVACY.PATTERN.NUMERIC_LAYOUT" not in _rules(report)
+
+
+def test_profile_patterns_scan_numeric_user_text_ooxml_attributes(
+    tmp_path: Path,
+) -> None:
+    profile = _profile_with_generic_pattern(
+        tmp_path,
+        pattern_id="numeric-description",
+        regex=r"\d+",
+    )
+    document = tmp_path / "thesis.docx"
+    _write_docx(
+        document,
+        {
+            "word/document.xml": (
+                '<wp:docPr xmlns:wp="http://schemas.openxmlformats.org/'
+                'drawingml/2006/wordprocessingDrawing" descr="123"/>'
+            )
+        },
+    )
+
+    report = release_check(document, profile, DENYLIST)
+
+    assert "PRIVACY.PATTERN.NUMERIC_DESCRIPTION" in _rules(report)
 
 
 def test_profile_patterns_do_not_scan_xml_namespace_declarations(
@@ -332,7 +392,7 @@ def test_profile_patterns_do_not_scan_xml_namespace_declarations(
     ],
     ids=("relationship-id", "relationship-type", "schema-location", "mc-prefix"),
 )
-def test_profile_patterns_skip_only_explicit_structural_ooxml_attributes(
+def test_profile_patterns_skip_standard_ooxml_control_attributes(
     tmp_path: Path,
     xml: str,
 ) -> None:
