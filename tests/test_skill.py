@@ -80,11 +80,11 @@ def test_skill_has_exact_commands_quick_reference_and_pressure_red_flags() -> No
     assert "## Quick Reference" in text
     assert "## Common Mistakes and Red Flags" in text
     assert (
-        "thesis-format audit thesis.docx --profile rules/university.yaml "
+        "thesis-format audit thesis.docx --profile rules/apple-university.yaml "
         "--report reports/audit.json --markdown reports/audit.md"
     ) in text
     assert (
-        "thesis-format format thesis.docx --profile rules/university.yaml "
+        "thesis-format format thesis.docx --profile rules/apple-university.yaml "
         "--output build/thesis-formatted.docx "
         "--report reports/transformation.json"
     ) in text
@@ -97,6 +97,12 @@ def test_skill_has_exact_commands_quick_reference_and_pressure_red_flags() -> No
         "thesis-format preview build/thesis-formatted.pdf "
         "--manifest reports/render-manifest.json "
         "--output-dir reports/preview"
+    ) in text
+    assert (
+        "thesis-format release-check release-directory "
+        "--profile rules/apple-university.yaml "
+        "--denylist /absolute/path/to/private-denylist.txt "
+        "--report reports/privacy.json"
     ) in text
     for rationalization in (
         "The deadline is close",

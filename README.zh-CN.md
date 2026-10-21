@@ -42,11 +42,12 @@ uv sync --frozen --all-extras
 的虚构配置当成通用规范。
 
 ```bash
-thesis-format audit thesis.docx --profile rules/university.yaml --report reports/audit.json --markdown reports/audit.md
-thesis-format format thesis.docx --profile rules/university.yaml --output build/thesis-formatted.docx --report reports/transformation.json
-thesis-format export build/thesis-formatted.docx --output build/thesis-formatted.pdf --manifest reports/render-manifest.json
-thesis-format preview build/thesis-formatted.pdf --manifest reports/render-manifest.json --output-dir reports/preview
-thesis-format release-check build/thesis-formatted.docx --profile rules/university.yaml --report reports/privacy.json
+mkdir -p build/reports
+thesis-format audit examples/before.docx --profile rules/apple-university.yaml --report build/reports/audit.json --markdown build/reports/audit.md
+thesis-format format examples/before.docx --profile rules/apple-university.yaml --output build/thesis-formatted.docx --report build/reports/transformation.json
+thesis-format export build/thesis-formatted.docx --output build/thesis-formatted.pdf --manifest build/reports/render-manifest.json
+thesis-format preview build/thesis-formatted.pdf --manifest build/reports/render-manifest.json --output-dir build/reports/preview
+thesis-format release-check examples --profile rules/apple-university.yaml --denylist tests/fixtures/privacy/synthetic-denylist.txt --report build/reports/privacy.json --markdown build/reports/privacy.md
 ```
 
 `audit` 诊断问题；`format` 生成新 DOCX 与内容比较证据；`export` 生成 PDF 和渲染
@@ -158,7 +159,23 @@ docker run --rm \
 以及 PDF 文本和元数据、路径、类似身份信息的值、未解析占位符和可选的字面量
 denylist。报告和命令输出会对发现内容脱敏；无法读取或格式损坏的范围会失败关闭。
 
-CI 只使用公开的合成测试文件
-[`tests/fixtures/privacy/synthetic-denylist.txt`](tests/fixtures/privacy/synthetic-denylist.txt)，
-不需要任何组织专用 denylist 或秘密。真实使用时，应将额外的本地 denylist 保留在
-版本控制之外，并通过 `--denylist` 传入。
+### 可复现演示发布检查
+
+公开演示会扫描**整个** [`examples/`](examples/) 发布目录，包括 DOCX、PDF、报告、
+截图、文件名和元数据。它只使用仓库内的合成测试文件，不需要任何私有数据：
+
+```bash
+thesis-format release-check examples --profile rules/apple-university.yaml --denylist tests/fixtures/privacy/synthetic-denylist.txt --report build/reports/privacy.json --markdown build/reports/privacy.md
+```
+
+### 真实发布检查
+
+在仓库外创建包含项目专用敏感字面量的 denylist，设置以下路径；不得提交该 denylist
+或其中的值：
+
+```bash
+RELEASE_DIR=/absolute/path/to/release-directory
+APPROVED_PROFILE=/absolute/path/to/approved-profile.yaml
+PRIVATE_DENYLIST=/absolute/path/to/private-denylist.txt
+thesis-format release-check "$RELEASE_DIR" --profile "$APPROVED_PROFILE" --denylist "$PRIVATE_DENYLIST" --report build/reports/private-release-privacy.json --markdown build/reports/private-release-privacy.md
+```

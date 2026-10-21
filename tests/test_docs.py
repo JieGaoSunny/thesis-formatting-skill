@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from pathlib import Path
 
 import yaml
@@ -13,18 +14,24 @@ CANONICAL_IMAGE = (
     "sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79"
 )
 COMMANDS = (
-    "thesis-format audit thesis.docx --profile rules/university.yaml "
-    "--report reports/audit.json --markdown reports/audit.md",
-    "thesis-format format thesis.docx --profile rules/university.yaml "
+    "thesis-format audit examples/before.docx "
+    "--profile rules/apple-university.yaml "
+    "--report build/reports/audit.json --markdown build/reports/audit.md",
+    "thesis-format format examples/before.docx "
+    "--profile rules/apple-university.yaml "
     "--output build/thesis-formatted.docx "
-    "--report reports/transformation.json",
+    "--report build/reports/transformation.json",
     "thesis-format export build/thesis-formatted.docx "
     "--output build/thesis-formatted.pdf "
-    "--manifest reports/render-manifest.json",
+    "--manifest build/reports/render-manifest.json",
     "thesis-format preview build/thesis-formatted.pdf "
-    "--manifest reports/render-manifest.json --output-dir reports/preview",
-    "thesis-format release-check build/thesis-formatted.docx "
-    "--profile rules/university.yaml --report reports/privacy.json",
+    "--manifest build/reports/render-manifest.json "
+    "--output-dir build/reports/preview",
+    "thesis-format release-check examples "
+    "--profile rules/apple-university.yaml "
+    "--denylist tests/fixtures/privacy/synthetic-denylist.txt "
+    "--report build/reports/privacy.json "
+    "--markdown build/reports/privacy.md",
 )
 SCREENSHOT_NAMES = (
     "cover",
@@ -97,6 +104,94 @@ def test_all_relative_readme_links_exist() -> None:
             assert (ROOT / target).exists(), f"{readme.name}: {target}"
 
 
+def test_documented_demo_command_inputs_exist_or_are_prior_outputs() -> None:
+    value_options = {
+        "--profile",
+        "--denylist",
+        "--report",
+        "--markdown",
+        "--output",
+        "--manifest",
+        "--output-dir",
+    }
+    output_options = {
+        "--report",
+        "--markdown",
+        "--output",
+        "--manifest",
+        "--output-dir",
+    }
+
+    for readme in READMES:
+        lines = _text(readme).splitlines()
+        commands = [line for line in lines if line in COMMANDS]
+        assert commands[: len(COMMANDS)] == list(COMMANDS)
+        assert set(commands) == set(COMMANDS)
+        created_directories = {
+            Path(token)
+            for line in lines
+            if line.startswith("mkdir -p ")
+            for token in shlex.split(line)[2:]
+        }
+        created_directories |= {
+            parent
+            for directory in tuple(created_directories)
+            for parent in directory.parents
+            if parent != Path(".")
+        }
+        produced: set[Path] = set()
+
+        for command in commands:
+            arguments = shlex.split(command)
+            source = Path(arguments[2])
+            assert (ROOT / source).exists() or source in produced, command
+
+            for index, argument in enumerate(arguments):
+                if argument not in value_options:
+                    continue
+                path = Path(arguments[index + 1])
+                if argument in output_options:
+                    assert (
+                        (ROOT / path.parent).exists()
+                        or path.parent in created_directories
+                    ), f"{command}: missing output parent {path.parent}"
+                    produced.add(path)
+                else:
+                    assert (ROOT / path).exists(), f"{command}: {path}"
+
+
+def test_no_documentation_or_skill_uses_missing_legacy_profile_path() -> None:
+    paths = [
+        *READMES,
+        ROOT / "SKILL.md",
+        ROOT / ".claude" / "skills" / "thesis-formatting" / "SKILL.md",
+        ROOT / ".github" / "skills" / "thesis-formatting" / "SKILL.md",
+        ROOT / ".github" / "workflows" / "ci.yml",
+    ]
+    legacy_profile = "rules/" + "university.yaml"
+    for path in paths:
+        assert legacy_profile not in _text(path)
+
+
+def test_release_documentation_has_demo_and_private_modes() -> None:
+    for readme in READMES:
+        text = _text(readme)
+        release_commands = [
+            line
+            for line in text.splitlines()
+            if line.startswith("thesis-format release-check ")
+        ]
+        assert len(release_commands) >= 2
+        assert all("--denylist" in command for command in release_commands)
+        assert any(
+            "release-check examples " in command
+            and "tests/fixtures/privacy/synthetic-denylist.txt" in command
+            for command in release_commands
+        )
+        assert "PRIVATE_DENYLIST" in text
+        assert "never commit" in text.lower() or "不得提交" in text
+
+
 def test_public_documentation_is_anonymous_and_generic() -> None:
     documentation = [
         *READMES,
@@ -135,6 +230,13 @@ def test_ci_is_pinned_reproducible_and_public_safe() -> None:
     assert CANONICAL_IMAGE in text
     assert "tests/test_render.py tests/test_demo_e2e.py" in text
     assert "tests/fixtures/privacy/synthetic-denylist.txt" in text
+    assert re.search(r"release-check examples\s+\\", text)
+    assert "release-check examples/after.docx" not in text
+    assert (
+        "tests/test_privacy.py::"
+        "test_committed_examples_pass_release_check_with_profile_and_denylist"
+        in text
+    )
     assert "tests/test_docs.py" in text
     assert "actions/upload-artifact@" in text
     assert "ci-reports" in text

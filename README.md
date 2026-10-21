@@ -46,11 +46,12 @@ reviewed profile for the document being processed; never treat the fictional
 profile as universal policy.
 
 ```bash
-thesis-format audit thesis.docx --profile rules/university.yaml --report reports/audit.json --markdown reports/audit.md
-thesis-format format thesis.docx --profile rules/university.yaml --output build/thesis-formatted.docx --report reports/transformation.json
-thesis-format export build/thesis-formatted.docx --output build/thesis-formatted.pdf --manifest reports/render-manifest.json
-thesis-format preview build/thesis-formatted.pdf --manifest reports/render-manifest.json --output-dir reports/preview
-thesis-format release-check build/thesis-formatted.docx --profile rules/university.yaml --report reports/privacy.json
+mkdir -p build/reports
+thesis-format audit examples/before.docx --profile rules/apple-university.yaml --report build/reports/audit.json --markdown build/reports/audit.md
+thesis-format format examples/before.docx --profile rules/apple-university.yaml --output build/thesis-formatted.docx --report build/reports/transformation.json
+thesis-format export build/thesis-formatted.docx --output build/thesis-formatted.pdf --manifest build/reports/render-manifest.json
+thesis-format preview build/thesis-formatted.pdf --manifest build/reports/render-manifest.json --output-dir build/reports/preview
+thesis-format release-check examples --profile rules/apple-university.yaml --denylist tests/fixtures/privacy/synthetic-denylist.txt --report build/reports/privacy.json --markdown build/reports/privacy.md
 ```
 
 `audit` diagnoses; `format` writes a new DOCX and content-comparison evidence;
@@ -173,8 +174,24 @@ identity-shaped values, unresolved placeholders, and optional literal denylist
 entries. Findings are redacted in reports and command output. Unreadable or
 malformed in-scope content fails closed.
 
-CI uses only the public synthetic fixture
-[`tests/fixtures/privacy/synthetic-denylist.txt`](tests/fixtures/privacy/synthetic-denylist.txt);
-it needs no organization-specific denylist or secret. For real work, keep any
-additional local denylist outside version control and pass it with
-`--denylist`.
+### Reproducible demonstration release check
+
+The public demo scans the **entire** [`examples/`](examples/) release directory,
+including DOCX, PDF, reports, screenshots, filenames, and metadata. It uses only
+the committed synthetic fixture and requires no private data:
+
+```bash
+thesis-format release-check examples --profile rules/apple-university.yaml --denylist tests/fixtures/privacy/synthetic-denylist.txt --report build/reports/privacy.json --markdown build/reports/privacy.md
+```
+
+### Real publishing release check
+
+Create a denylist outside the repository containing project-specific private
+literals, set the paths below, and never commit the denylist or its values:
+
+```bash
+RELEASE_DIR=/absolute/path/to/release-directory
+APPROVED_PROFILE=/absolute/path/to/approved-profile.yaml
+PRIVATE_DENYLIST=/absolute/path/to/private-denylist.txt
+thesis-format release-check "$RELEASE_DIR" --profile "$APPROVED_PROFILE" --denylist "$PRIVATE_DENYLIST" --report build/reports/private-release-privacy.json --markdown build/reports/private-release-privacy.md
+```

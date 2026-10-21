@@ -38,7 +38,7 @@ jobs:
 
       - name: Run synthetic privacy scan
         run: |
-          uv run --frozen thesis-format release-check examples/after.docx \
+          uv run --frozen thesis-format release-check examples \
             --profile rules/apple-university.yaml \
             --denylist tests/fixtures/privacy/synthetic-denylist.txt \
             --report ci-reports/privacy.json \
@@ -54,7 +54,7 @@ jobs:
             -v "$PWD:/workspace" \
             -w /workspace \
             "$CANONICAL_IMAGE" \
-            -lc 'uv sync --frozen --all-extras && uv run --frozen pytest tests/test_render.py tests/test_demo_e2e.py --junitxml=ci-reports/integration.xml'
+            -lc 'uv sync --frozen --all-extras && uv run --frozen pytest tests/test_render.py tests/test_demo_e2e.py tests/test_privacy.py::test_committed_examples_pass_release_check_with_profile_and_denylist --junitxml=ci-reports/integration.xml'
 
       - name: Upload reports
         if: always()

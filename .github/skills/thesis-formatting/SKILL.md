@@ -21,11 +21,11 @@ Never claim compliance with validation incomplete, including audit, content comp
 ## Exact Command Example
 
 ```bash
-thesis-format audit thesis.docx --profile rules/university.yaml --report reports/audit.json --markdown reports/audit.md
-thesis-format format thesis.docx --profile rules/university.yaml --output build/thesis-formatted.docx --report reports/transformation.json
+thesis-format audit thesis.docx --profile rules/apple-university.yaml --report reports/audit.json --markdown reports/audit.md
+thesis-format format thesis.docx --profile rules/apple-university.yaml --output build/thesis-formatted.docx --report reports/transformation.json
 thesis-format export build/thesis-formatted.docx --output build/thesis-formatted.pdf --manifest reports/render-manifest.json
 thesis-format preview build/thesis-formatted.pdf --manifest reports/render-manifest.json --output-dir reports/preview
-thesis-format release-check build/thesis-formatted.docx --profile rules/university.yaml --report reports/privacy.json
+thesis-format release-check release-directory --profile rules/apple-university.yaml --denylist /absolute/path/to/private-denylist.txt --report reports/privacy.json
 ```
 
 ## Quick Reference
