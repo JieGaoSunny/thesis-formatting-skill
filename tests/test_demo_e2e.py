@@ -238,6 +238,21 @@ def test_committed_before_after_demo_regenerates_end_to_end(
         name: len(manifest["pages"])
         for name, manifest in manifests.items()
     }
+    normalized_manifests = {
+        name: _normalized_render_manifest(manifest)
+        for name, manifest in manifests.items()
+    }
+    if os.environ.get("CI"):
+        (ROOT / "ci-reports" / "generated-render-baselines.json").write_text(
+            json.dumps(
+                normalized_manifests,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     assert 12 <= page_counts["after"] <= 15
     assert abs(page_counts["before"] - page_counts["after"]) <= 2
     for name, manifest in manifests.items():
@@ -248,7 +263,7 @@ def test_committed_before_after_demo_regenerates_end_to_end(
         expected = _load(
             BASELINES / f"expected-{name}-render-manifest.json"
         )
-        assert _normalized_render_manifest(manifest) == expected
+        assert normalized_manifests[name] == expected
         pdf = tmp_path / f"{name}.pdf"
         for selector in (
             "demo_cover",
