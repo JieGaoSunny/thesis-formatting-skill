@@ -42,17 +42,21 @@ uv sync --frozen --all-extras
 的虚构配置当成通用规范。
 
 ```bash
-mkdir -p build/reports
-thesis-format audit examples/before.docx --profile rules/apple-university.yaml --report build/reports/audit.json --markdown build/reports/audit.md
-thesis-format format examples/before.docx --profile rules/apple-university.yaml --output build/thesis-formatted.docx --report build/reports/transformation.json
-thesis-format export build/thesis-formatted.docx --output build/thesis-formatted.pdf --manifest build/reports/render-manifest.json
-thesis-format preview build/thesis-formatted.pdf --manifest build/reports/render-manifest.json --output-dir build/reports/preview
-thesis-format release-check examples --profile rules/apple-university.yaml --denylist tests/fixtures/privacy/synthetic-denylist.txt --report build/reports/privacy.json --markdown build/reports/privacy.md
+rm -rf build/release
+mkdir -p build/release
+export THESIS_RENDER_MODE=local
+uv run thesis-format audit examples/before.docx --profile rules/apple-university.yaml --report build/release/before-audit.json --markdown build/release/before-audit.md
+uv run thesis-format format examples/before.docx --profile rules/apple-university.yaml --output build/release/after.docx --report build/release/transformation.json
+uv run thesis-format export build/release/after.docx --output build/release/after.pdf --manifest build/release/render-manifest.json --allow-noncanonical
+uv run thesis-format preview build/release/after.pdf --manifest build/release/render-manifest.json --output-dir build/release/previews
+uv run thesis-format release-check build/release --profile rules/apple-university.yaml --denylist tests/fixtures/privacy/synthetic-denylist.txt --report build/privacy.json --markdown build/privacy.md
 ```
 
 `audit` 诊断问题；`format` 生成新 DOCX 与内容比较证据；`export` 生成 PDF 和渲染
 清单；`preview` 生成审阅图片；`release-check` 扫描发布集合。退出码 `0` 表示成功，
 `1` 表示存在发现项或验证未完成，`2` 表示输入、配置或工具无效。
+由于输入文档有意包含缺陷，首次审计会返回 `1`；审计报告仍会正常写入，并作为
+生成发布目录中的证据。
 
 仅在本地开发时设置 `THESIS_RENDER_MODE=local`，并向 `export` 传入
 `--allow-noncanonical`。此类输出明确属于非规范渲染，不得用作出版或合规证据。
@@ -165,7 +169,7 @@ denylist。报告和命令输出会对发现内容脱敏；无法读取或格式
 截图、文件名和元数据。它只使用仓库内的合成测试文件，不需要任何私有数据：
 
 ```bash
-thesis-format release-check examples --profile rules/apple-university.yaml --denylist tests/fixtures/privacy/synthetic-denylist.txt --report build/reports/privacy.json --markdown build/reports/privacy.md
+uv run thesis-format release-check examples --profile rules/apple-university.yaml --denylist tests/fixtures/privacy/synthetic-denylist.txt --report build/examples-privacy.json --markdown build/examples-privacy.md
 ```
 
 ### 真实发布检查
@@ -177,5 +181,5 @@ thesis-format release-check examples --profile rules/apple-university.yaml --den
 RELEASE_DIR=/absolute/path/to/release-directory
 APPROVED_PROFILE=/absolute/path/to/approved-profile.yaml
 PRIVATE_DENYLIST=/absolute/path/to/private-denylist.txt
-thesis-format release-check "$RELEASE_DIR" --profile "$APPROVED_PROFILE" --denylist "$PRIVATE_DENYLIST" --report build/reports/private-release-privacy.json --markdown build/reports/private-release-privacy.md
+uv run thesis-format release-check "$RELEASE_DIR" --profile "$APPROVED_PROFILE" --denylist "$PRIVATE_DENYLIST" --report build/private-release-privacy.json --markdown build/private-release-privacy.md
 ```

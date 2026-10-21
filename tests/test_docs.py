@@ -14,24 +14,25 @@ CANONICAL_IMAGE = (
     "sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79"
 )
 COMMANDS = (
-    "thesis-format audit examples/before.docx "
+    "uv run thesis-format audit examples/before.docx "
     "--profile rules/apple-university.yaml "
-    "--report build/reports/audit.json --markdown build/reports/audit.md",
-    "thesis-format format examples/before.docx "
+    "--report build/release/before-audit.json "
+    "--markdown build/release/before-audit.md",
+    "uv run thesis-format format examples/before.docx "
     "--profile rules/apple-university.yaml "
-    "--output build/thesis-formatted.docx "
-    "--report build/reports/transformation.json",
-    "thesis-format export build/thesis-formatted.docx "
-    "--output build/thesis-formatted.pdf "
-    "--manifest build/reports/render-manifest.json",
-    "thesis-format preview build/thesis-formatted.pdf "
-    "--manifest build/reports/render-manifest.json "
-    "--output-dir build/reports/preview",
-    "thesis-format release-check examples "
+    "--output build/release/after.docx "
+    "--report build/release/transformation.json",
+    "uv run thesis-format export build/release/after.docx "
+    "--output build/release/after.pdf "
+    "--manifest build/release/render-manifest.json --allow-noncanonical",
+    "uv run thesis-format preview build/release/after.pdf "
+    "--manifest build/release/render-manifest.json "
+    "--output-dir build/release/previews",
+    "uv run thesis-format release-check build/release "
     "--profile rules/apple-university.yaml "
     "--denylist tests/fixtures/privacy/synthetic-denylist.txt "
-    "--report build/reports/privacy.json "
-    "--markdown build/reports/privacy.md",
+    "--report build/privacy.json "
+    "--markdown build/privacy.md",
 )
 SCREENSHOT_NAMES = (
     "cover",
@@ -143,8 +144,12 @@ def test_documented_demo_command_inputs_exist_or_are_prior_outputs() -> None:
 
         for command in commands:
             arguments = shlex.split(command)
-            source = Path(arguments[2])
-            assert (ROOT / source).exists() or source in produced, command
+            source = Path(arguments[4])
+            assert (
+                (ROOT / source).exists()
+                or source in produced
+                or source in created_directories
+            ), command
 
             for index, argument in enumerate(arguments):
                 if argument not in value_options:
@@ -158,6 +163,25 @@ def test_documented_demo_command_inputs_exist_or_are_prior_outputs() -> None:
                     produced.add(path)
                 else:
                     assert (ROOT / path).exists(), f"{command}: {path}"
+
+            if arguments[3] == "release-check":
+                generated_release_outputs = {
+                    path for path in produced if path != source
+                }
+                assert generated_release_outputs
+                assert all(
+                    output.is_relative_to(source)
+                    for output in generated_release_outputs
+                    if output not in {Path("build/privacy.json"), Path("build/privacy.md")}
+                )
+                for required in (
+                    source / "before-audit.json",
+                    source / "after.docx",
+                    source / "after.pdf",
+                    source / "render-manifest.json",
+                    source / "previews",
+                ):
+                    assert required in produced
 
 
 def test_no_documentation_or_skill_uses_missing_legacy_profile_path() -> None:
@@ -179,7 +203,7 @@ def test_release_documentation_has_demo_and_private_modes() -> None:
         release_commands = [
             line
             for line in text.splitlines()
-            if line.startswith("thesis-format release-check ")
+            if line.startswith("uv run thesis-format release-check ")
         ]
         assert len(release_commands) >= 2
         assert all("--denylist" in command for command in release_commands)
@@ -190,6 +214,19 @@ def test_release_documentation_has_demo_and_private_modes() -> None:
         )
         assert "PRIVATE_DENYLIST" in text
         assert "never commit" in text.lower() or "不得提交" in text
+
+
+def test_documented_cli_commands_use_uv_run() -> None:
+    documentation = [
+        *READMES,
+        ROOT / "SKILL.md",
+        ROOT / ".claude" / "skills" / "thesis-formatting" / "SKILL.md",
+        ROOT / ".github" / "skills" / "thesis-formatting" / "SKILL.md",
+    ]
+    for path in documentation:
+        for line in _text(path).splitlines():
+            if re.match(r"^(?:uv run )?thesis-format ", line):
+                assert line.startswith("uv run thesis-format "), f"{path}: {line}"
 
 
 def test_public_documentation_is_anonymous_and_generic() -> None:
@@ -232,6 +269,10 @@ def test_ci_is_pinned_reproducible_and_public_safe() -> None:
     assert "tests/fixtures/privacy/synthetic-denylist.txt" in text
     assert re.search(r"release-check examples\s+\\", text)
     assert "release-check examples/after.docx" not in text
+    assert "ci-reports/acceptance-release" in text
+    assert re.search(
+        r"release-check ci-reports/acceptance-release\s+\\", text
+    )
     assert (
         "tests/test_privacy.py::"
         "test_committed_examples_pass_release_check_with_profile_and_denylist"

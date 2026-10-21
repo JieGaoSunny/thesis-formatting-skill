@@ -80,26 +80,28 @@ def test_skill_has_exact_commands_quick_reference_and_pressure_red_flags() -> No
     assert "## Quick Reference" in text
     assert "## Common Mistakes and Red Flags" in text
     assert (
-        "thesis-format audit thesis.docx --profile rules/apple-university.yaml "
+        "uv run thesis-format audit thesis.docx "
+        "--profile rules/apple-university.yaml "
         "--report reports/audit.json --markdown reports/audit.md"
     ) in text
     assert (
-        "thesis-format format thesis.docx --profile rules/apple-university.yaml "
+        "uv run thesis-format format thesis.docx "
+        "--profile rules/apple-university.yaml "
         "--output build/thesis-formatted.docx "
         "--report reports/transformation.json"
     ) in text
     assert (
-        "thesis-format export build/thesis-formatted.docx "
+        "uv run thesis-format export build/thesis-formatted.docx "
         "--output build/thesis-formatted.pdf "
         "--manifest reports/render-manifest.json"
     ) in text
     assert (
-        "thesis-format preview build/thesis-formatted.pdf "
+        "uv run thesis-format preview build/thesis-formatted.pdf "
         "--manifest reports/render-manifest.json "
         "--output-dir reports/preview"
     ) in text
     assert (
-        "thesis-format release-check release-directory "
+        "uv run thesis-format release-check release-directory "
         "--profile rules/apple-university.yaml "
         "--denylist /absolute/path/to/private-denylist.txt "
         "--report reports/privacy.json"

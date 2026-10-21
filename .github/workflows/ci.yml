@@ -54,7 +54,23 @@ jobs:
             -v "$PWD:/workspace" \
             -w /workspace \
             "$CANONICAL_IMAGE" \
-            -lc 'uv sync --frozen --all-extras && uv run --frozen pytest tests/test_render.py tests/test_demo_e2e.py tests/test_privacy.py::test_committed_examples_pass_release_check_with_profile_and_denylist --junitxml=ci-reports/integration.xml'
+            -lc 'uv sync --frozen --all-extras &&
+              uv run --frozen pytest tests/test_render.py tests/test_demo_e2e.py tests/test_privacy.py::test_committed_examples_pass_release_check_with_profile_and_denylist --junitxml=ci-reports/integration.xml &&
+              rm -rf ci-reports/acceptance-release &&
+              mkdir -p ci-reports/acceptance-release &&
+              (uv run thesis-format audit examples/before.docx --profile rules/apple-university.yaml --report ci-reports/acceptance-release/before-audit.json --markdown ci-reports/acceptance-release/before-audit.md; test $? -eq 1) &&
+              uv run thesis-format format examples/before.docx --profile rules/apple-university.yaml --output ci-reports/acceptance-release/after.docx --report ci-reports/acceptance-release/transformation.json &&
+              THESIS_RENDER_MODE=local uv run thesis-format export ci-reports/acceptance-release/after.docx --output ci-reports/acceptance-release/after.pdf --manifest ci-reports/acceptance-release/render-manifest.json --allow-noncanonical &&
+              uv run thesis-format preview ci-reports/acceptance-release/after.pdf --manifest ci-reports/acceptance-release/render-manifest.json --output-dir ci-reports/acceptance-release/previews'
+
+      - name: Privacy-scan generated acceptance release
+        run: |
+          test -d ci-reports/acceptance-release
+          uv run --frozen thesis-format release-check ci-reports/acceptance-release \
+            --profile rules/apple-university.yaml \
+            --denylist tests/fixtures/privacy/synthetic-denylist.txt \
+            --report ci-reports/generated-privacy.json \
+            --markdown ci-reports/generated-privacy.md
 
       - name: Upload reports
         if: always()

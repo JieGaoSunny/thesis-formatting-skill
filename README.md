@@ -46,18 +46,22 @@ reviewed profile for the document being processed; never treat the fictional
 profile as universal policy.
 
 ```bash
-mkdir -p build/reports
-thesis-format audit examples/before.docx --profile rules/apple-university.yaml --report build/reports/audit.json --markdown build/reports/audit.md
-thesis-format format examples/before.docx --profile rules/apple-university.yaml --output build/thesis-formatted.docx --report build/reports/transformation.json
-thesis-format export build/thesis-formatted.docx --output build/thesis-formatted.pdf --manifest build/reports/render-manifest.json
-thesis-format preview build/thesis-formatted.pdf --manifest build/reports/render-manifest.json --output-dir build/reports/preview
-thesis-format release-check examples --profile rules/apple-university.yaml --denylist tests/fixtures/privacy/synthetic-denylist.txt --report build/reports/privacy.json --markdown build/reports/privacy.md
+rm -rf build/release
+mkdir -p build/release
+export THESIS_RENDER_MODE=local
+uv run thesis-format audit examples/before.docx --profile rules/apple-university.yaml --report build/release/before-audit.json --markdown build/release/before-audit.md
+uv run thesis-format format examples/before.docx --profile rules/apple-university.yaml --output build/release/after.docx --report build/release/transformation.json
+uv run thesis-format export build/release/after.docx --output build/release/after.pdf --manifest build/release/render-manifest.json --allow-noncanonical
+uv run thesis-format preview build/release/after.pdf --manifest build/release/render-manifest.json --output-dir build/release/previews
+uv run thesis-format release-check build/release --profile rules/apple-university.yaml --denylist tests/fixtures/privacy/synthetic-denylist.txt --report build/privacy.json --markdown build/privacy.md
 ```
 
 `audit` diagnoses; `format` writes a new DOCX and content-comparison evidence;
 `export` creates a PDF and render manifest; `preview` creates review images;
 `release-check` scans the release set. Exit codes are `0` for success, `1` for
 findings or incomplete validation, and `2` for invalid input or tooling.
+The deliberately defective input makes the first audit return `1`; its reports
+are still written and are part of the generated release evidence.
 
 For local development only, set `THESIS_RENDER_MODE=local` and pass
 `--allow-noncanonical` to `export`. Such output is explicitly noncanonical and
@@ -181,7 +185,7 @@ including DOCX, PDF, reports, screenshots, filenames, and metadata. It uses only
 the committed synthetic fixture and requires no private data:
 
 ```bash
-thesis-format release-check examples --profile rules/apple-university.yaml --denylist tests/fixtures/privacy/synthetic-denylist.txt --report build/reports/privacy.json --markdown build/reports/privacy.md
+uv run thesis-format release-check examples --profile rules/apple-university.yaml --denylist tests/fixtures/privacy/synthetic-denylist.txt --report build/examples-privacy.json --markdown build/examples-privacy.md
 ```
 
 ### Real publishing release check
@@ -193,5 +197,5 @@ literals, set the paths below, and never commit the denylist or its values:
 RELEASE_DIR=/absolute/path/to/release-directory
 APPROVED_PROFILE=/absolute/path/to/approved-profile.yaml
 PRIVATE_DENYLIST=/absolute/path/to/private-denylist.txt
-thesis-format release-check "$RELEASE_DIR" --profile "$APPROVED_PROFILE" --denylist "$PRIVATE_DENYLIST" --report build/reports/private-release-privacy.json --markdown build/reports/private-release-privacy.md
+uv run thesis-format release-check "$RELEASE_DIR" --profile "$APPROVED_PROFILE" --denylist "$PRIVATE_DENYLIST" --report build/private-release-privacy.json --markdown build/private-release-privacy.md
 ```
