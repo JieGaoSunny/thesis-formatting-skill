@@ -9,10 +9,6 @@ import yaml
 
 ROOT = Path(__file__).parents[1]
 READMES = (ROOT / "README.md", ROOT / "README.zh-CN.md")
-CANONICAL_IMAGE = (
-    "ghcr.io/jiegaosunny/thesis-formatting-skill-render@"
-    "sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79"
-)
 COMMANDS = (
     "uv run thesis-format audit examples/before.docx "
     "--profile rules/apple-university.yaml "
@@ -90,7 +86,8 @@ def test_readmes_are_complete_bilingual_equivalents() -> None:
                 f"examples/screenshots/before/demo_{screenshot}-" in text
             )
             assert f"examples/screenshots/after/demo_{screenshot}-" in text
-        assert CANONICAL_IMAGE in text
+        assert "canonical_container_status" in text
+        assert "canonical_image_reference" in text
         assert ".claude/skills/thesis-formatting/SKILL.md" in text
         assert ".github/skills/thesis-formatting/SKILL.md" in text
 
@@ -268,21 +265,27 @@ def test_ci_is_pinned_reproducible_and_public_safe() -> None:
     )
     assert font_install in text
     assert text.index(font_install) < text.index("- name: Run unit tests")
-    assert f"docker pull {CANONICAL_IMAGE}" in text
-    assert CANONICAL_IMAGE in text
-    assert "tests/test_render.py tests/test_demo_e2e.py" in text
-    assert 'sudo chown -R "$(id -u):$(id -g)" .venv ci-reports' in text
+    assert "Resolve canonical image pin" in text
+    assert "canonical_image_reference" in text
+    assert "canonical_image_digest" in text
+    assert "--entrypoint" not in text
+    assert "THESIS_RENDER_MODE" not in text
+    assert "--allow-noncanonical" not in text
+    assert "-w /workspace" not in text
+    assert '-v "$PWD/ci-reports/canonical-smoke:/workspace"' in text
+    assert "-v \"$PWD:/workspace\"" not in text
+    assert "THESIS_RENDER_IMAGE_DIGEST=${{ steps.canonical.outputs.digest }}" in text
+    assert "require_canonical_render_manifest" in text
+    assert "canonical-smoke/after.docx" in text
+    assert "canonical-smoke/after.pdf" in text
+    assert "canonical-smoke/previews" in text
+    assert 'sudo chown -R "$(id -u):$(id -g)" ci-reports' in text
     assert "tests/fixtures/privacy/synthetic-denylist.txt" in text
     assert re.search(r"release-check examples\s+\\", text)
     assert "release-check examples/after.docx" not in text
     assert "ci-reports/acceptance-release" in text
     assert re.search(
         r"release-check ci-reports/acceptance-release\s+\\", text
-    )
-    assert (
-        "tests/test_privacy.py::"
-        "test_committed_examples_pass_release_check_with_profile_and_denylist"
-        in text
     )
     assert "tests/test_docs.py" in text
     assert "actions/upload-artifact@" in text

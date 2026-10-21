@@ -8,9 +8,6 @@ on:
 permissions:
   contents: read
 
-env:
-  CANONICAL_IMAGE: ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -49,31 +46,94 @@ jobs:
             --report ci-reports/privacy.json \
             --markdown ci-reports/privacy.md
 
-      - name: Pull canonical render image
-        run: docker pull ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79
-
-      - name: Run render and demo integration in container
+      - name: Build acceptance DOCX locally
         run: |
+          rm -rf ci-reports/acceptance-release ci-reports/canonical-smoke
+          mkdir -p ci-reports/acceptance-release ci-reports/canonical-smoke
           set +e
-          docker run --rm \
-            --entrypoint bash \
-            -v "$PWD:/workspace" \
-            -w /workspace \
-            "$CANONICAL_IMAGE" \
-            -lc 'uv sync --frozen --all-extras &&
-              uv run --frozen pytest tests/test_render.py tests/test_demo_e2e.py tests/test_privacy.py::test_committed_examples_pass_release_check_with_profile_and_denylist --junitxml=ci-reports/integration.xml &&
-              rm -rf ci-reports/acceptance-release &&
-              mkdir -p ci-reports/acceptance-release &&
-              (uv run thesis-format audit examples/before.docx --profile rules/apple-university.yaml --report ci-reports/acceptance-release/before-audit.json --markdown ci-reports/acceptance-release/before-audit.md; test $? -eq 1) &&
-              uv run thesis-format format examples/before.docx --profile rules/apple-university.yaml --output ci-reports/acceptance-release/after.docx --report ci-reports/acceptance-release/transformation.json &&
-              THESIS_RENDER_MODE=local uv run thesis-format export ci-reports/acceptance-release/after.docx --output ci-reports/acceptance-release/after.pdf --manifest ci-reports/acceptance-release/render-manifest.json --allow-noncanonical &&
-              uv run thesis-format preview ci-reports/acceptance-release/after.pdf --manifest ci-reports/acceptance-release/render-manifest.json --output-dir ci-reports/acceptance-release/previews'
+          uv run --frozen thesis-format audit examples/before.docx \
+            --profile rules/apple-university.yaml \
+            --report ci-reports/acceptance-release/before-audit.json \
+            --markdown ci-reports/acceptance-release/before-audit.md
           status=$?
           set -e
-          sudo chown -R "$(id -u):$(id -g)" .venv ci-reports
-          exit "$status"
+          test "$status" -eq 1
+          uv run --frozen thesis-format format examples/before.docx \
+            --profile rules/apple-university.yaml \
+            --output ci-reports/acceptance-release/after.docx \
+            --report ci-reports/acceptance-release/transformation.json
+          cp ci-reports/acceptance-release/after.docx \
+            ci-reports/canonical-smoke/after.docx
+
+      - name: Resolve canonical image pin
+        id: canonical
+        run: |
+          uv run --frozen python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          environment = json.loads(
+              Path("render-environment.json").read_text(encoding="utf-8")
+          )
+          available = environment.get("canonical_container_status") == "published-pinned"
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8") as stream:
+              stream.write(f"available={'true' if available else 'false'}\n")
+              if available:
+                  stream.write(
+                      f"reference={environment['canonical_image_reference']}\n"
+                  )
+                  stream.write(
+                      f"digest={environment['canonical_image_digest']}\n"
+                  )
+          PY
+
+      - name: Pull canonical render image
+        if: steps.canonical.outputs.available == 'true'
+        run: docker pull "${{ steps.canonical.outputs.reference }}"
+
+      - name: Run standalone canonical image smoke
+        if: steps.canonical.outputs.available == 'true'
+        run: |
+          docker run --rm \
+            -e "THESIS_RENDER_IMAGE_DIGEST=${{ steps.canonical.outputs.digest }}" \
+            -v "$PWD/ci-reports/canonical-smoke:/workspace" \
+            "${{ steps.canonical.outputs.reference }}" \
+            export /workspace/after.docx \
+              --output /workspace/after.pdf \
+              --manifest /workspace/render-manifest.json
+          docker run --rm \
+            -e "THESIS_RENDER_IMAGE_DIGEST=${{ steps.canonical.outputs.digest }}" \
+            -v "$PWD/ci-reports/canonical-smoke:/workspace" \
+            "${{ steps.canonical.outputs.reference }}" \
+            preview /workspace/after.pdf \
+              --manifest /workspace/render-manifest.json \
+              --output-dir /workspace/previews
+          sudo chown -R "$(id -u):$(id -g)" ci-reports
+          uv run --frozen python - <<'PY'
+          import json
+          from pathlib import Path
+          from thesis_format.contracts import validate_render_manifest
+          from thesis_format.render import require_canonical_render_manifest
+
+          manifest = json.loads(
+              Path("ci-reports/canonical-smoke/render-manifest.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          validate_render_manifest(manifest)
+          require_canonical_render_manifest(manifest)
+          PY
+          cp ci-reports/canonical-smoke/after.pdf \
+            ci-reports/acceptance-release/after.pdf
+          cp ci-reports/canonical-smoke/render-manifest.json \
+            ci-reports/acceptance-release/render-manifest.json
+          cp -R ci-reports/canonical-smoke/previews \
+            ci-reports/acceptance-release/previews
 
       - name: Privacy-scan generated acceptance release
+        if: steps.canonical.outputs.available == 'true'
         run: |
           test -d ci-reports/acceptance-release
           uv run --frozen thesis-format release-check ci-reports/acceptance-release \

@@ -29,13 +29,13 @@ ROOT = Path(__file__).parents[1]
 BASELINE = ROOT / "tests" / "fixtures" / "render" / "baseline.json"
 SOFFICE = Path("/opt/homebrew/bin/soffice")
 CANONICAL_IMAGE_DIGEST = (
-    "sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79"
+    "sha256:" + "a" * 64
 )
 CANONICAL_IMAGE_REFERENCE = (
     "ghcr.io/jiegaosunny/thesis-formatting-skill-render@"
     f"{CANONICAL_IMAGE_DIGEST}"
 )
-CANONICAL_SOURCE_COMMIT = "9e29b0eb77a4749e330fac4902be10597330ce92"
+CANONICAL_SOURCE_COMMIT = "b" * 40
 DEBIAN_SNAPSHOT = "20250203T000000Z"
 FONT_QUERIES = ["Liberation Serif", "Noto Serif CJK SC"]
 SOFFICE_VERSION = "LibreOffice 24.2.7.2 actual-build"
@@ -159,6 +159,9 @@ def canonical_runtime_attestation(
                 "schema_version": "1.0",
                 "source_commit": CANONICAL_SOURCE_COMMIT,
                 "debian_snapshot": DEBIAN_SNAPSHOT,
+                "font_queries": FONT_QUERIES,
+                "locale": "zh_CN.UTF-8",
+                "timezone": "UTC",
                 "soffice_version_sha256": hashlib.sha256(
                     SOFFICE_VERSION.encode("utf-8")
                 ).hexdigest(),
@@ -256,6 +259,94 @@ def test_canonical_image_digest_must_match_pinned_environment_digest(
     }
 
 
+def test_default_environment_is_synthesized_from_trusted_image_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "app"
+    project_root.mkdir()
+    monkeypatch.setattr(render, "_project_root", lambda: project_root)
+
+    environment = render._load_environment(None)
+
+    assert environment["renderer"] == {
+        "name": "LibreOffice",
+        "repository": "https://github.com/JieGaoSunny/thesis-formatting-skill",
+        "expected_source_snapshot": f"debian-bookworm@{DEBIAN_SNAPSHOT}",
+    }
+    assert environment["canonical_source_commit"] == CANONICAL_SOURCE_COMMIT
+    assert environment["canonical_build_inputs"] == {
+        "debian_snapshot": DEBIAN_SNAPSHOT,
+        "font_queries": FONT_QUERIES,
+    }
+    assert environment["canonical_image_digest"] == CANONICAL_IMAGE_DIGEST
+    assert environment["_runtime_image_digest"] == CANONICAL_IMAGE_DIGEST
+    assert environment["render_mode"] == "canonical"
+
+
+def test_inspect_pdf_uses_synthesized_default_environment_in_image(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    detected_version: None,
+) -> None:
+    project_root = tmp_path / "app"
+    project_root.mkdir()
+    pdf = tmp_path / "demo.pdf"
+    _make_pdf(pdf, pages=1)
+    monkeypatch.setattr(render, "_project_root", lambda: project_root)
+
+    manifest = inspect_pdf(pdf)
+
+    assert manifest["renderer"]["image_digest"] == CANONICAL_IMAGE_DIGEST
+    assert manifest["environment"] == {
+        "mode": "canonical",
+        "canonical": True,
+    }
+
+
+def test_default_environment_without_config_or_trusted_marker_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "checkout"
+    project_root.mkdir()
+    monkeypatch.setattr(render, "_project_root", lambda: project_root)
+    monkeypatch.setattr(
+        render, "_canonical_marker_path", lambda: tmp_path / "missing-marker.json"
+    )
+
+    with pytest.raises(
+        CanonicalEnvironmentError,
+        match="trusted container marker",
+    ):
+        render._load_environment(None)
+
+
+def test_synthesized_default_environment_requires_runtime_image_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "app"
+    project_root.mkdir()
+    monkeypatch.setattr(render, "_project_root", lambda: project_root)
+    monkeypatch.delenv("THESIS_RENDER_IMAGE_DIGEST")
+
+    with pytest.raises(
+        CanonicalEnvironmentError,
+        match="THESIS_RENDER_IMAGE_DIGEST",
+    ):
+        render._load_environment(None)
+
+
+def test_explicit_external_environment_path_never_falls_back_to_image_marker(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "render-environment.json"
+
+    with pytest.raises(CanonicalEnvironmentError, match="invalid render environment"):
+        render._load_environment(missing)
+
+
 def test_spoofed_digest_without_container_marker_is_noncanonical(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -274,7 +365,7 @@ def test_spoofed_digest_without_container_marker_is_noncanonical(
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("source_commit", "b" * 40, "source commit"),
+        ("source_commit", "c" * 40, "source commit"),
         ("debian_snapshot", "20250101T000000Z", "Debian snapshot"),
         ("soffice_version_sha256", "0" * 64, "LibreOffice version"),
         ("font_input_fingerprint", "0" * 64, "font input"),
@@ -367,7 +458,7 @@ def test_cli_export_fails_canonical_acceptance_while_digest_is_pending(
     )
 
     assert result == 2
-    assert "THESIS_RENDER_IMAGE_DIGEST" in capsys.readouterr().err
+    assert "canonical_image_digest" in capsys.readouterr().err
     assert not (tmp_path / "output.pdf").exists()
 
 
@@ -387,19 +478,19 @@ def test_render_environment_marks_rebuild_pending_and_defines_attestation() -> N
     assert environment["renderer"]["local_detected_version"].startswith(
         "LibreOffice "
     )
-    assert environment["canonical_container_status"] == "published-pinned"
-    assert environment["canonical_image_digest"] == CANONICAL_IMAGE_DIGEST
-    assert environment["canonical_image_reference"] == CANONICAL_IMAGE_REFERENCE
-    assert environment["canonical_source_commit"] == CANONICAL_SOURCE_COMMIT
+    assert environment["canonical_container_status"] == "pending-rebuild"
+    assert "canonical_image_digest" not in environment
+    assert "canonical_image_reference" not in environment
+    assert environment["canonical_source_commit"] == "CURRENT_COMMIT"
     assert environment["canonical_build_inputs"] == {
         "debian_snapshot": DEBIAN_SNAPSHOT,
         "font_queries": FONT_QUERIES,
     }
-    assert CANONICAL_IMAGE_REFERENCE in environment["release_ci_instructions"]
-    assert f"THESIS_RENDER_IMAGE_DIGEST={CANONICAL_IMAGE_DIGEST}" in readme
-    assert CANONICAL_IMAGE_REFERENCE in readme
-    assert f"THESIS_RENDER_IMAGE_DIGEST={CANONICAL_IMAGE_DIGEST}" in readme_zh
-    assert CANONICAL_IMAGE_REFERENCE in readme_zh
+    assert "pending rebuild and immutable digest pin" in environment[
+        "release_ci_instructions"
+    ]
+    assert CANONICAL_IMAGE_REFERENCE not in readme
+    assert CANONICAL_IMAGE_REFERENCE not in readme_zh
     assert (
         "python:3.12.11-slim-bookworm@sha256:"
         "519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7"
@@ -416,6 +507,8 @@ def test_render_environment_marks_rebuild_pending_and_defines_attestation() -> N
     assert "source_commit" in dockerfile
     assert "soffice_version_sha256" in dockerfile
     assert "font_input_fingerprint" in dockerfile
+    assert '"font_queries": queries' in dockerfile
+    assert '"locale": os.environ["LANG"]' in dockerfile
     assert "chown root:root" in dockerfile
     assert "chmod 0444" in dockerfile
     assert "COPY render-environment.json" not in dockerfile

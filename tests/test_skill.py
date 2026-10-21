@@ -90,15 +90,19 @@ def test_skill_has_exact_commands_quick_reference_and_pressure_red_flags() -> No
         "--output build/thesis-formatted.docx "
         "--report reports/transformation.json"
     ) in text
+    assert "canonical_image_reference" in text
+    assert "canonical_image_digest" in text
+    assert '-v "$PWD:/workspace"' in text
+    assert "--entrypoint" not in text
     assert (
-        "uv run thesis-format export build/thesis-formatted.docx "
-        "--output build/thesis-formatted.pdf "
-        "--manifest reports/render-manifest.json"
+        '"$CANONICAL_IMAGE" export /workspace/build/thesis-formatted.docx '
+        "--output /workspace/build/thesis-formatted.pdf "
+        "--manifest /workspace/reports/render-manifest.json"
     ) in text
     assert (
-        "uv run thesis-format preview build/thesis-formatted.pdf "
-        "--manifest reports/render-manifest.json "
-        "--output-dir reports/preview"
+        '"$CANONICAL_IMAGE" preview /workspace/build/thesis-formatted.pdf '
+        "--manifest /workspace/reports/render-manifest.json "
+        "--output-dir /workspace/reports/preview"
     ) in text
     assert (
         "uv run thesis-format release-check release-directory "

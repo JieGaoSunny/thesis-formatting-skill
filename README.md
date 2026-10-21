@@ -141,25 +141,29 @@ and Poppler are available. CI installs exactly from [`uv.lock`](uv.lock), checks
 documentation links, runs unit tests outside the container, then runs render
 and end-to-end demo tests inside the canonical image.
 
-Canonical renderer image (exact immutable digest):
-
-```text
-ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79
-```
-
-Pull it exactly:
+The canonical launcher reads the exact immutable pin from
+[`render-environment.json`](render-environment.json). A source change sets
+`canonical_container_status` to `pending-rebuild` and removes
+`canonical_image_reference` and `canonical_image_digest`; canonical rendering
+remains blocked until the rebuilt image is published and repinned.
 
 ```bash
-docker pull ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79
+CANONICAL_IMAGE="$(python -c 'import json; print(json.load(open("render-environment.json"))["canonical_image_reference"])')"
+CANONICAL_DIGEST="$(python -c 'import json; print(json.load(open("render-environment.json"))["canonical_image_digest"])')"
+docker pull "$CANONICAL_IMAGE"
 docker run --rm \
-  -e THESIS_RENDER_IMAGE_DIGEST=sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79 \
-  ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79 \
+  -e "THESIS_RENDER_IMAGE_DIGEST=$CANONICAL_DIGEST" \
+  -v "$PWD:/workspace" \
+  "$CANONICAL_IMAGE" \
   --version
 ```
 
 Canonical mode verifies the root-owned container marker, source/build inputs,
 image digest, LibreOffice version, fonts, locale, and PDF hash. Merely setting
 `THESIS_RENDER_IMAGE_DIGEST` on another host cannot make a render canonical.
+When `/app/render-environment.json` is absent, the image synthesizes its runtime
+environment from the root-owned marker. A local checkout without either its
+external configuration or the trusted marker fails closed.
 
 ## Limitations and manual review
 
@@ -177,6 +181,8 @@ relationships, properties, embedded filenames, PDF text/metadata, paths,
 identity-shaped values, unresolved placeholders, and optional literal denylist
 entries. Findings are redacted in reports and command output. Unreadable or
 malformed in-scope content fails closed.
+Every symbolic link found anywhere in a release tree is rejected as
+`PRIVACY.UNSUPPORTED`, including safe relative links; targets are never followed.
 
 ### Reproducible demonstration release check
 

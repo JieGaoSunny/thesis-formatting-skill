@@ -130,25 +130,27 @@ uv run --frozen pytest
 [`uv.lock`](uv.lock) 安装依赖，检查文档链接，在容器外运行单元测试，并在规范镜像
 中运行渲染测试和端到端演示测试。
 
-规范渲染镜像（精确且不可变的摘要）：
-
-```text
-ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79
-```
-
-精确拉取：
+规范启动器从 [`render-environment.json`](render-environment.json) 读取精确且不可变的
+镜像固定值。源码变更后，`canonical_container_status` 会设为 `pending-rebuild`，
+并删除 `canonical_image_reference` 与 `canonical_image_digest`；必须在重建、发布并
+重新固定镜像后才能进行规范渲染。
 
 ```bash
-docker pull ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79
+CANONICAL_IMAGE="$(python -c 'import json; print(json.load(open("render-environment.json"))["canonical_image_reference"])')"
+CANONICAL_DIGEST="$(python -c 'import json; print(json.load(open("render-environment.json"))["canonical_image_digest"])')"
+docker pull "$CANONICAL_IMAGE"
 docker run --rm \
-  -e THESIS_RENDER_IMAGE_DIGEST=sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79 \
-  ghcr.io/jiegaosunny/thesis-formatting-skill-render@sha256:5866364e94961d3e8f33402985f4b2e900febb07a7503e83b8c957216c1c9d79 \
+  -e "THESIS_RENDER_IMAGE_DIGEST=$CANONICAL_DIGEST" \
+  -v "$PWD:/workspace" \
+  "$CANONICAL_IMAGE" \
   --version
 ```
 
 规范模式会校验 root 所有的容器标记、源码与构建输入、镜像摘要、LibreOffice 版本、
 字体、区域设置和 PDF 哈希。仅在其他主机设置 `THESIS_RENDER_IMAGE_DIGEST` 不能
 把渲染结果变成规范产物。
+当 `/app/render-environment.json` 不存在时，镜像会从 root 所有的固定标记合成
+运行环境；本地检出若既无外部配置也无可信标记，则会失败关闭。
 
 ## 限制与人工审阅 / Limitations and manual review
 
@@ -162,6 +164,8 @@ docker run --rm \
 发布检查会扫描 DOCX 的可见及隐藏文本、OOXML 属性、关系、文档属性、嵌入文件名，
 以及 PDF 文本和元数据、路径、类似身份信息的值、未解析占位符和可选的字面量
 denylist。报告和命令输出会对发现内容脱敏；无法读取或格式损坏的范围会失败关闭。
+发布树中遇到的每个符号链接都会以 `PRIVACY.UNSUPPORTED` 拒绝，包括安全的相对链接；
+扫描器绝不会跟随链接目标。
 
 ### 可复现演示发布检查
 

@@ -100,6 +100,9 @@ marker = {
     "schema_version": "1.0",
     "source_commit": os.environ["SOURCE_COMMIT"].lower(),
     "debian_snapshot": os.environ["DEBIAN_SNAPSHOT"],
+    "font_queries": queries,
+    "locale": os.environ["LANG"],
+    "timezone": os.environ["TZ"],
     "soffice_version_sha256": hashlib.sha256(
         version.encode("utf-8")
     ).hexdigest(),

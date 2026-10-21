@@ -22,6 +22,8 @@ acceptable.
   automated scanner can guarantee that all sensitive context has been found.
 - A noncanonical render is useful for development only and cannot establish
   publication reproducibility.
+- Release privacy checks reject every symbolic link as `PRIVACY.UNSUPPORTED`,
+  including safe relative links, and never follow link targets.
 
 ## Required manual review
 

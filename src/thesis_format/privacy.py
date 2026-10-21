@@ -1198,20 +1198,20 @@ class _Scanner:
         else:
             paths = (self.root,)
         for path in paths:
-            if any(part in _SKIPPED_DIRECTORIES for part in path.parts):
-                if path.is_file():
-                    self.skipped.add(self.display_path(path))
-                continue
             try:
                 display_path = self.display_path(path)
                 if path.is_symlink():
                     self.scan_filename(path, display_path)
-                    self.scan_text(
-                        str(path.readlink()),
+                    self.unsupported(
                         display_path,
-                        "symlink-target",
+                        "symlink",
+                        "symbolic link",
                     )
                     self.scanned.add(display_path)
+                    continue
+                if any(part in _SKIPPED_DIRECTORIES for part in path.parts):
+                    if path.is_file():
+                        self.skipped.add(display_path)
                     continue
                 if path.absolute() == self.denylist_path:
                     self.skipped.add(self.display_path(path))

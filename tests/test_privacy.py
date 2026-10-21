@@ -657,7 +657,7 @@ def test_permitted_docx_identity_metadata_must_use_fictional_value(
     )
 
 
-def test_scans_symlink_target_text_without_following_including_broken_links(
+def test_rejects_every_nested_symlink_without_following_it(
     tmp_path: Path,
 ) -> None:
     repository = tmp_path / "repository"
@@ -674,22 +674,24 @@ def test_scans_symlink_target_text_without_following_including_broken_links(
     report = release_check(repository, PROFILE, DENYLIST)
 
     findings_by_path = {
-        finding["path"]: finding["rule_id"]
+        finding["path"]: finding
         for finding in report["findings"]  # type: ignore[index]
     }
-    assert findings_by_path["absolute-link"] == "PRIVACY.ABSOLUTE_PATH"
-    assert findings_by_path["denylist-link"] == "PRIVACY.DENYLIST"
-    assert findings_by_path["pattern-link"] in {
-        "PRIVACY.EMAIL",
-        "PRIVACY.PATTERN.EMAIL",
-    }
-    assert "safe-link" not in findings_by_path
+    assert set(findings_by_path) == set(targets)
+    assert all(
+        finding["rule_id"] == "PRIVACY.UNSUPPORTED"
+        for finding in findings_by_path.values()
+    )
+    assert all(
+        finding["location"] == "symlink"
+        for finding in findings_by_path.values()
+    )
     assert set(targets) <= set(report["scanned_files"])  # type: ignore[arg-type]
     serialized = json.dumps(report)
     assert all(target not in serialized for target in targets.values())
 
 
-def test_contained_symlink_scans_target_string_without_following_target(
+def test_safe_relative_symlink_is_unsupported_and_target_is_not_followed(
     tmp_path: Path,
 ) -> None:
     repository = tmp_path / "repository"
@@ -700,8 +702,28 @@ def test_contained_symlink_scans_target_string_without_following_target(
 
     report = release_check(repository, PROFILE, DENYLIST)
 
-    assert _rules(report) == []
+    assert _rules(report) == ["PRIVACY.UNSUPPORTED"]
     assert report["scanned_files"] == ["safe-link"]
+    assert "PRIVACY.EMAIL" not in _rules(report)
+
+
+def test_symlink_inside_otherwise_skipped_directory_is_unsupported(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    skipped = repository / ".git"
+    skipped.mkdir(parents=True)
+    (skipped / "safe-link").symlink_to("../public.txt")
+
+    report = release_check(repository, PROFILE, DENYLIST)
+
+    finding = next(
+        finding
+        for finding in report["findings"]  # type: ignore[index]
+        if finding["path"] == ".git/safe-link"
+    )
+    assert finding["rule_id"] == "PRIVACY.UNSUPPORTED"
+    assert finding["location"] == "symlink"
 
 
 def test_rejects_top_level_source_symlink_with_cli_exit_two(

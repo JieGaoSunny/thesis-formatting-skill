@@ -23,10 +23,19 @@ Never claim compliance with validation incomplete, including audit, content comp
 ```bash
 uv run thesis-format audit thesis.docx --profile rules/apple-university.yaml --report reports/audit.json --markdown reports/audit.md
 uv run thesis-format format thesis.docx --profile rules/apple-university.yaml --output build/thesis-formatted.docx --report reports/transformation.json
-uv run thesis-format export build/thesis-formatted.docx --output build/thesis-formatted.pdf --manifest reports/render-manifest.json
-uv run thesis-format preview build/thesis-formatted.pdf --manifest reports/render-manifest.json --output-dir reports/preview
+CANONICAL_IMAGE="$(python -c 'import json; print(json.load(open("render-environment.json"))["canonical_image_reference"])')"
+CANONICAL_DIGEST="$(python -c 'import json; print(json.load(open("render-environment.json"))["canonical_image_digest"])')"
+docker run --rm -e "THESIS_RENDER_IMAGE_DIGEST=$CANONICAL_DIGEST" -v "$PWD:/workspace" "$CANONICAL_IMAGE" export /workspace/build/thesis-formatted.docx --output /workspace/build/thesis-formatted.pdf --manifest /workspace/reports/render-manifest.json
+docker run --rm -e "THESIS_RENDER_IMAGE_DIGEST=$CANONICAL_DIGEST" -v "$PWD:/workspace" "$CANONICAL_IMAGE" preview /workspace/build/thesis-formatted.pdf --manifest /workspace/reports/render-manifest.json --output-dir /workspace/reports/preview
 uv run thesis-format release-check release-directory --profile rules/apple-university.yaml --denylist /absolute/path/to/private-denylist.txt --report reports/privacy.json
 ```
+
+The Docker commands deliberately use the image's `/app` entrypoint: they mount
+only the current workspace at `/workspace`, do not replace `/app`, and obtain
+the exact immutable image reference and digest from the external repository
+`render-environment.json` pin. If its `canonical_container_status` is
+`pending-rebuild`, canonical publication is blocked until the image is rebuilt
+and those two pin fields are populated.
 
 ## Quick Reference
 
@@ -49,8 +58,9 @@ runtime LibreOffice/font observations; a spoofed digest on a local host is
 never canonical. Use `THESIS_RENDER_MODE=local` only for explicit local
 development; its manifest is marked noncanonical and cannot satisfy canonical
 acceptance. The export command rejects noncanonical manifests by default.
-`--allow-noncanonical` is a development-only escape hatch and
-**must not** be used for compliance evidence, publication, or any public artifact.
+`--allow-noncanonical` is an explicitly noncompliant development-only fallback
+and **must not** be used for compliance evidence, publication, or any public
+artifact.
 Preview warns when its manifest is noncanonical.
 
 ## Common Mistakes and Red Flags

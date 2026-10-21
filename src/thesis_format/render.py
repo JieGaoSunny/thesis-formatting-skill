@@ -73,6 +73,72 @@ def _canonical_marker_path() -> Path:
     return _CANONICAL_MARKER
 
 
+def _read_canonical_marker() -> dict[str, Any]:
+    marker_path = _canonical_marker_path()
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise CanonicalEnvironmentError(
+            f"canonical rendering requires the trusted container marker: {marker_path}"
+        ) from error
+    if not isinstance(marker, Mapping) or marker.get("schema_version") != "1.0":
+        raise CanonicalEnvironmentError("invalid canonical container marker")
+    return dict(marker)
+
+
+def _environment_from_canonical_marker() -> dict[str, Any]:
+    marker = _read_canonical_marker()
+    digest = os.environ.get(_IMAGE_DIGEST_ENV)
+    if not isinstance(digest, str) or not _IMAGE_DIGEST.fullmatch(digest):
+        raise CanonicalEnvironmentError(
+            "canonical rendering requires a valid "
+            f"{_IMAGE_DIGEST_ENV}=sha256:<64 lowercase hex characters>"
+        )
+    source_commit = marker.get("source_commit")
+    debian_snapshot = marker.get("debian_snapshot")
+    font_queries = marker.get("font_queries")
+    locale = marker.get("locale")
+    timezone = marker.get("timezone")
+    if (
+        not isinstance(source_commit, str)
+        or not _SOURCE_COMMIT.fullmatch(source_commit)
+        or not isinstance(debian_snapshot, str)
+        or not debian_snapshot
+        or not isinstance(font_queries, list)
+        or not font_queries
+        or any(not isinstance(query, str) or not query for query in font_queries)
+        or not isinstance(locale, str)
+        or len(locale) < 2
+        or not isinstance(timezone, str)
+        or not timezone
+    ):
+        raise CanonicalEnvironmentError(
+            "trusted container marker is missing canonical runtime build inputs"
+        )
+    return {
+        "schema_version": "1.0",
+        "renderer": {
+            "name": "LibreOffice",
+            "repository": (
+                "https://github.com/JieGaoSunny/thesis-formatting-skill"
+            ),
+            "expected_source_snapshot": f"debian-bookworm@{debian_snapshot}",
+        },
+        "render_mode": "canonical",
+        "canonical_container_status": "image-marker",
+        "canonical_source_commit": source_commit,
+        "canonical_build_inputs": {
+            "debian_snapshot": debian_snapshot,
+            "font_queries": list(font_queries),
+        },
+        "canonical_image_digest": digest,
+        "locale": locale,
+        "timezone": timezone,
+        "soffice_path": "soffice",
+        "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
+    }
+
+
 def _font_input_fingerprint(observations: Sequence[Mapping[str, str]]) -> str:
     return _sha256_bytes(canonical_json(list(observations)).encode("utf-8"))
 
@@ -158,15 +224,7 @@ def _validate_canonical_container(
             "canonical Debian snapshot conflicts with renderer source snapshot"
         )
 
-    marker_path = _canonical_marker_path()
-    try:
-        marker = json.loads(marker_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise CanonicalEnvironmentError(
-            f"canonical rendering requires the trusted container marker: {marker_path}"
-        ) from error
-    if not isinstance(marker, Mapping) or marker.get("schema_version") != "1.0":
-        raise CanonicalEnvironmentError("invalid canonical container marker")
+    marker = _read_canonical_marker()
 
     marker_commit = marker.get("source_commit")
     if (
@@ -209,16 +267,21 @@ def _validate_canonical_container(
 def _load_environment(
     environment: Mapping[str, Any] | str | Path | None,
 ) -> dict[str, Any]:
+    default_path: Path | None = None
     if environment is None:
-        environment = _project_root() / "render-environment.json"
+        default_path = _project_root() / "render-environment.json"
+        environment = default_path
     if isinstance(environment, (str, Path)):
         path = Path(environment)
         try:
             loaded = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
-            raise CanonicalEnvironmentError(
-                f"invalid render environment: {path}"
-            ) from error
+            if default_path is not None and not path.exists():
+                loaded = _environment_from_canonical_marker()
+            else:
+                raise CanonicalEnvironmentError(
+                    f"invalid render environment: {path}"
+                ) from error
     else:
         loaded = dict(environment)
     renderer = loaded.get("renderer")
