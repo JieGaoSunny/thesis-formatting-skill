@@ -72,7 +72,7 @@ def _docx_structural_hashes(path: Path) -> dict[str, object]:
         parts = {
             name: hashlib.sha256(package.read(name)).hexdigest()
             for name in sorted(package.namelist())
-            if not name.endswith("/")
+            if not name.endswith("/") and not name.startswith("word/media/")
         }
     return {
         "package_hash": canonical_sha256(parts),
@@ -85,6 +85,19 @@ def _audit_counts(report: dict[str, object]) -> Counter[str]:
         str(finding["severity"])
         for finding in report["findings"]  # type: ignore[index]
     )
+
+
+def test_docx_structural_hashes_ignore_platform_font_rasterization(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.docx"
+    second = tmp_path / "second.docx"
+    for path, image in ((first, b"mac-font"), (second, b"linux-font")):
+        with ZipFile(path, "w") as package:
+            package.writestr("word/document.xml", b"<document/>")
+            package.writestr("word/media/image1.png", image)
+
+    assert _docx_structural_hashes(first) == _docx_structural_hashes(second)
 
 
 def _destination_page(

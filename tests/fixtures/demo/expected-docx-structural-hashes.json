@@ -1,6 +1,6 @@
 {
   "before": {
-    "package_hash": "2c45ec7d62634954e8373f06550c87fc6372da5abc2ebb5faf3ad9c4e42b0b76",
+    "package_hash": "cf5622ee4e37a3e1d5aa0a705812a1b87d16703741ae35e5aaefb30211141b78",
     "parts": {
       "[Content_Types].xml": "edf2d6f8269d76197c0f50737a8240ba41b9785bd40b3cb0114838d19f439049",
       "_rels/.rels": "a9ae57efe9186f07d48303bcac5d54c7e359bf3f503939c03ad2954e5c59a5c4",
@@ -20,8 +20,6 @@
       "word/header1.xml": "7e169293cd141018bb54e904030e4b019f03173a57e8f5a0d2d1952eceb08e59",
       "word/header2.xml": "cc9fc15c72541b01006a2aa40aa7cbeed5c6258c9cb7f5a11a7c2f6953312e5c",
       "word/header3.xml": "b1ef940e08d2c5cdeefefcc50fca11c5666a1ca802c74355cd43be194535864b",
-      "word/media/image1.png": "0afde75f1ab5b5a22f3fd4ca17e9a9ca05ba1baee5b61357609dccb19c9c2524",
-      "word/media/image2.png": "a6b7cb369b54c0f307040a0960ca4d5deea95bb4d06f57ff36a0e96a0c553bef",
       "word/numbering.xml": "1d0ec7418b21569dc008ddece0b8f7a2fcf0c6ac693e128efa04b1670231bd63",
       "word/settings.xml": "39d0ab34096a9e241a0e1ff6eecfa681291661a8fe62c6e2de90af239efa6d7a",
       "word/styles.xml": "dc4644704699ba5e80018a5441b76f8702cb0ddd1d9160e6f0a5ad33d11df768",
@@ -31,7 +29,7 @@
     }
   },
   "after": {
-    "package_hash": "55dde96ba3f237d52991c64ff15c17cd4f713c943da2684c2e1a40d462909bb1",
+    "package_hash": "57d7883dd9eba2d8919aa817aeb302451619351cc7ccaa6b9d8c16e12bd5f960",
     "parts": {
       "[Content_Types].xml": "9f8fddb6ffd0d335161b181b741e5b083ffd843fef458499bed52b74268345a7",
       "_rels/.rels": "89ee90ddf14c814ce1f2924dbe8b99d231fc6c89089a1a31f456002fb9f1813c",
@@ -51,8 +49,6 @@
       "word/header1.xml": "1fe6700b5b7a6432c1281fc034c4bd452c1c11e2938e6dc2d84e04c85e379347",
       "word/header2.xml": "93e250947711d796fae79e3603a34ee3c2ac252e2750ff6c8f38d5aca9c10689",
       "word/header3.xml": "f8e799e526e1d14dbeaad500f173924184934de52c08b62cf491ee37a0834525",
-      "word/media/image1.png": "0afde75f1ab5b5a22f3fd4ca17e9a9ca05ba1baee5b61357609dccb19c9c2524",
-      "word/media/image2.png": "a6b7cb369b54c0f307040a0960ca4d5deea95bb4d06f57ff36a0e96a0c553bef",
       "word/numbering.xml": "b340fa6e1d89c4f075b632b61db2ce908286c459190fa37645356f6bbf942b9d",
       "word/settings.xml": "0865a3bf20d0dde84716f8977bf43297ac66e4293c59dd63d994486cc85f3ec4",
       "word/styles.xml": "eb376006816a17d035bf147a9a7b7fbed8fc841e0135ee48e9a60eeed2deb3eb",
