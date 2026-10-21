@@ -1405,6 +1405,72 @@ def test_formatter_creates_fixed_text_header_from_profile(
     }
 
 
+def test_formatter_links_headers_only_within_matching_regions_and_sources(
+    tmp_path: Path,
+) -> None:
+    source = build_template(tmp_path / "regional-headers.docx", PROFILE)
+    source_document = Document(source)
+    source_document.add_section()
+    source_document.add_paragraph(
+        "附录 B 表格",
+        style="AppleAppendixHeading",
+    )
+    source_document.save(source)
+
+    report = format_document(
+        source,
+        tmp_path / "formatted.docx",
+        PROFILE,
+        clock=lambda: NOW,
+    )
+
+    package = OoxmlPackage.open(tmp_path / "formatted.docx")
+    document = package.xml("word/document.xml")
+    relationships = package.xml("word/_rels/document.xml.rels")
+    targets = {
+        relationship.get("Id"): f"word/{relationship.get('Target')}"
+        for relationship in relationships.findall(f"{{{REL_NS}}}Relationship")
+    }
+    header_targets = [
+        targets[relationship_id]
+        for relationship_id in document.xpath(
+            ".//w:sectPr/w:headerReference[@w:type='default']/@r:id",
+            namespaces=NS,
+        )
+    ]
+    body_target, appendix_target, second_appendix_target = header_targets[-3:]
+    assert body_target != appendix_target
+    assert appendix_target == second_appendix_target
+    assert package.xml(body_target).xpath(
+        ".//w:instrText[contains(., 'AppleHeading1')]",
+        namespaces=NS,
+    )
+    assert not package.xml(body_target).xpath(
+        ".//w:instrText[contains(., 'AppleAppendixHeading')]",
+        namespaces=NS,
+    )
+    assert package.xml(appendix_target).xpath(
+        ".//w:instrText[contains(., 'AppleAppendixHeading')]",
+        namespaces=NS,
+    )
+    assert not package.xml(appendix_target).xpath(
+        ".//w:instrText[contains(., 'AppleHeading1')]",
+        namespaces=NS,
+    )
+    assert not {
+        "HEADER.FOOTER.HEADER_SOURCE",
+        "HEADER.FOOTER.HEADER_REQUIRED",
+    } & {
+        finding["rule_id"] for finding in report["post_audit"]["findings"]
+    }
+    assert not any(
+        finding["rule_id"] == "HEADER.FOOTER.LINKING"
+        and finding["location"] == f"section:{len(header_targets) - 1}"
+        and "header" in finding["before"]
+        for finding in report["post_audit"]["findings"]
+    )
+
+
 def _location_key(location: str) -> tuple[object, ...]:
     order = {
         "document": 0,

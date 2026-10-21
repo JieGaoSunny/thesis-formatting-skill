@@ -1,1 +1,145 @@
-{"extracted_text_hash":"687cc542e32251b674d0c74a02e9837e65fde17c9acbf099556081c87778b513","locale":"zh_CN.UTF-8","named_destinations":[{"name":"demo_appendix","page":14,"x_pt":235.45,"y_pt":700.389},{"name":"demo_body","page":4,"x_pt":307.45,"y_pt":700.389},{"name":"demo_cover","page":1,"x_pt":89.65,"y_pt":756.839},{"name":"demo_figure","page":7,"x_pt":85.05,"y_pt":684.989},{"name":"demo_references","page":13,"x_pt":265.65,"y_pt":700.389},{"name":"demo_table","page":7,"x_pt":207.8,"y_pt":412.689},{"name":"demo_toc","page":2,"x_pt":281.65,"y_pt":256.389}],"page_dimensions":{"height_pt":841.89,"width_pt":595.304},"pages":[{"height_pt":841.89,"page":1,"perceptual_hash":"d4f030d0d4d4c888","width_pt":595.304},{"height_pt":841.89,"page":2,"perceptual_hash":"30d0ccc4c0901010","width_pt":595.304},{"height_pt":841.89,"page":3,"perceptual_hash":"10d0d00000000000","width_pt":595.304},{"height_pt":841.89,"page":4,"perceptual_hash":"70f0c0c8d4c0e840","width_pt":595.304},{"height_pt":841.89,"page":5,"perceptual_hash":"70c0c4c400000000","width_pt":595.304},{"height_pt":841.89,"page":6,"perceptual_hash":"d4f0e0c4d4c00010","width_pt":595.304},{"height_pt":841.89,"page":7,"perceptual_hash":"ccf07074b0cce400","width_pt":595.304},{"height_pt":841.89,"page":8,"perceptual_hash":"d0d0c4c0d8000000","width_pt":595.304},{"height_pt":841.89,"page":9,"perceptual_hash":"ccf0e0c4d4d00010","width_pt":595.304},{"height_pt":841.89,"page":10,"perceptual_hash":"c8f0d868b8c0c400","width_pt":595.304},{"height_pt":841.89,"page":11,"perceptual_hash":"c0d0c0c4f0ccc400","width_pt":595.304},{"height_pt":841.89,"page":12,"perceptual_hash":"d4f0c4c4ccc4e000","width_pt":595.304},{"height_pt":841.89,"page":13,"perceptual_hash":"d4d0849400000000","width_pt":595.304},{"height_pt":841.89,"page":14,"perceptual_hash":"68e8c0d4d4c4c480","width_pt":595.304},{"height_pt":841.89,"page":15,"perceptual_hash":"68e09090d4c00010","width_pt":595.304}],"schema_version":"1.0"}
+{
+  "schema_version": "1.0",
+  "locale": "zh_CN.UTF-8",
+  "page_dimensions": {
+    "height_pt": 841.89,
+    "width_pt": 595.304
+  },
+  "named_destinations": [
+    {
+      "name": "demo_appendix",
+      "page": 14,
+      "x_pt": 235.45,
+      "y_pt": 736.439
+    },
+    {
+      "name": "demo_body",
+      "page": 4,
+      "x_pt": 307.45,
+      "y_pt": 737.189
+    },
+    {
+      "name": "demo_cover",
+      "page": 1,
+      "x_pt": 89.65,
+      "y_pt": 756.839
+    },
+    {
+      "name": "demo_figure",
+      "page": 7,
+      "x_pt": 85.05,
+      "y_pt": 751.189
+    },
+    {
+      "name": "demo_references",
+      "page": 13,
+      "x_pt": 265.65,
+      "y_pt": 737.189
+    },
+    {
+      "name": "demo_table",
+      "page": 7,
+      "x_pt": 207.8,
+      "y_pt": 478.889
+    },
+    {
+      "name": "demo_toc",
+      "page": 2,
+      "x_pt": 281.65,
+      "y_pt": 256.389
+    }
+  ],
+  "extracted_text_hash": "c81397f9e4e1b82f0dd68eea678f0ff93ec7fecba354925faf38b9cbcbc8c8d7",
+  "pages": [
+    {
+      "height_pt": 841.89,
+      "page": 1,
+      "perceptual_hash": "d4f030d0d4d4c888",
+      "width_pt": 595.304
+    },
+    {
+      "height_pt": 841.89,
+      "page": 2,
+      "perceptual_hash": "30d0ccc4c0901010",
+      "width_pt": 595.304
+    },
+    {
+      "height_pt": 841.89,
+      "page": 3,
+      "perceptual_hash": "10d0d00000000000",
+      "width_pt": 595.304
+    },
+    {
+      "height_pt": 841.89,
+      "page": 4,
+      "perceptual_hash": "10f0c0ccc4c8e800",
+      "width_pt": 595.304
+    },
+    {
+      "height_pt": 841.89,
+      "page": 5,
+      "perceptual_hash": "d0c0c4c400000000",
+      "width_pt": 595.304
+    },
+    {
+      "height_pt": 841.89,
+      "page": 6,
+      "perceptual_hash": "30f0c4d4d0005000",
+      "width_pt": 595.304
+    },
+    {
+      "height_pt": 841.89,
+      "page": 7,
+      "perceptual_hash": "30f070b0c8c4e400",
+      "width_pt": 595.304
+    },
+    {
+      "height_pt": 841.89,
+      "page": 8,
+      "perceptual_hash": "c0c4d80000000000",
+      "width_pt": 595.304
+    },
+    {
+      "height_pt": 841.89,
+      "page": 9,
+      "perceptual_hash": "30f0c4c4d0000000",
+      "width_pt": 595.304
+    },
+    {
+      "height_pt": 841.89,
+      "page": 10,
+      "perceptual_hash": "30f0e868d8c4d800",
+      "width_pt": 595.304
+    },
+    {
+      "height_pt": 841.89,
+      "page": 11,
+      "perceptual_hash": "f0c4e8e8ccc00010",
+      "width_pt": 595.304
+    },
+    {
+      "height_pt": 841.89,
+      "page": 12,
+      "perceptual_hash": "10e0c4c4c4c4e000",
+      "width_pt": 595.304
+    },
+    {
+      "height_pt": 841.89,
+      "page": 13,
+      "perceptual_hash": "10b0849000000000",
+      "width_pt": 595.304
+    },
+    {
+      "height_pt": 841.89,
+      "page": 14,
+      "perceptual_hash": "30e0c4d4d4c4c480",
+      "width_pt": 595.304
+    },
+    {
+      "height_pt": 841.89,
+      "page": 15,
+      "perceptual_hash": "f0c090d0e4001000",
+      "width_pt": 595.304
+    }
+  ]
+}

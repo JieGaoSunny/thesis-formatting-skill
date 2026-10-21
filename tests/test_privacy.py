@@ -299,8 +299,28 @@ def test_profile_patterns_scan_user_text_ooxml_attribute_values(
     assert "PRIVACY.PATTERN.SECRET_NAME" in _rules(report)
 
 
-def test_profile_patterns_do_not_scan_numeric_ooxml_layout_attributes(
+@pytest.mark.parametrize(
+    "xml",
+    [
+        (
+            '<w:sz xmlns:w="http://schemas.openxmlformats.org/'
+            'wordprocessingml/2006/main" w:val="12345678"/>'
+        ),
+        (
+            '<w:numId xmlns:w="http://schemas.openxmlformats.org/'
+            'wordprocessingml/2006/main" w:val="12345678"/>'
+        ),
+        (
+            '<wp:extent xmlns:wp="http://schemas.openxmlformats.org/'
+            'drawingml/2006/wordprocessingDrawing" '
+            'cx="12345678" cy="12345678"/>'
+        ),
+    ],
+    ids=("font-size", "numbering-id", "drawing-extent"),
+)
+def test_profile_patterns_do_not_scan_verified_structural_ooxml_attributes(
     tmp_path: Path,
+    xml: str,
 ) -> None:
     profile = _profile_with_generic_pattern(
         tmp_path,
@@ -310,12 +330,7 @@ def test_profile_patterns_do_not_scan_numeric_ooxml_layout_attributes(
     document = tmp_path / "thesis.docx"
     _write_docx(
         document,
-        {
-            "word/document.xml": (
-                '<wp:extent xmlns:wp="http://schemas.openxmlformats.org/'
-                'drawingml/2006/wordprocessingDrawing" cx="123" cy="456"/>'
-            )
-        },
+        {"word/document.xml": xml},
     )
 
     report = release_check(document, profile, DENYLIST)
@@ -323,8 +338,52 @@ def test_profile_patterns_do_not_scan_numeric_ooxml_layout_attributes(
     assert "PRIVACY.PATTERN.NUMERIC_LAYOUT" not in _rules(report)
 
 
-def test_profile_patterns_scan_numeric_user_text_ooxml_attributes(
+@pytest.mark.parametrize(
+    ("part_name", "xml"),
+    [
+        (
+            "word/document.xml",
+            (
+                '<w:tag xmlns:w="http://schemas.openxmlformats.org/'
+                'wordprocessingml/2006/main" w:val="12345678"/>'
+            ),
+        ),
+        (
+            "docProps/custom.xml",
+            (
+                '<property xmlns="http://schemas.openxmlformats.org/'
+                'officeDocument/2006/custom-properties" '
+                'name="12345678"/>'
+            ),
+        ),
+        (
+            "word/document.xml",
+            (
+                '<wp:docPr xmlns:wp="http://schemas.openxmlformats.org/'
+                'drawingml/2006/wordprocessingDrawing" descr="12345678"/>'
+            ),
+        ),
+        (
+            "word/document.xml",
+            (
+                '<wp:docPr xmlns:wp="http://schemas.openxmlformats.org/'
+                'drawingml/2006/wordprocessingDrawing" title="12345678"/>'
+            ),
+        ),
+        (
+            "word/_rels/document.xml.rels",
+            (
+                '<Relationship xmlns="http://schemas.openxmlformats.org/'
+                'package/2006/relationships" Target="12345678"/>'
+            ),
+        ),
+    ],
+    ids=("content-control-tag", "custom-property", "drawing-description", "drawing-title", "link"),
+)
+def test_profile_patterns_scan_numeric_user_content_ooxml_attributes(
     tmp_path: Path,
+    part_name: str,
+    xml: str,
 ) -> None:
     profile = _profile_with_generic_pattern(
         tmp_path,
@@ -334,12 +393,7 @@ def test_profile_patterns_scan_numeric_user_text_ooxml_attributes(
     document = tmp_path / "thesis.docx"
     _write_docx(
         document,
-        {
-            "word/document.xml": (
-                '<wp:docPr xmlns:wp="http://schemas.openxmlformats.org/'
-                'drawingml/2006/wordprocessingDrawing" descr="123"/>'
-            )
-        },
+        {part_name: xml},
     )
 
     report = release_check(document, profile, DENYLIST)

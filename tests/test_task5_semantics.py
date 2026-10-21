@@ -1229,7 +1229,7 @@ def test_header_linking_uses_targets_and_dynamic_sources_require_styleref(
     document.sections[1].header.is_linked_to_previous = False
     document.sections[1].header.paragraphs[0].text = "Different header"
     document.save(unlinked)
-    assert "HEADER.FOOTER.LINKING" in _rule_ids(unlinked)
+    assert "HEADER.FOOTER.LINKING" not in _rule_ids(unlinked)
 
 
 @pytest.mark.parametrize("reference_type", ["first", "even"])

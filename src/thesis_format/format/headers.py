@@ -370,6 +370,7 @@ def repair_headers(
         reference.set(f"{R}id", identifier)
 
     previous_targets: dict[str, str | None] = {"header": None, "footer": None}
+    previous_header_link_key: tuple[str, str, str, str | None] | None = None
 
     for index, section in enumerate(sections, start=1):
         region = (
@@ -413,6 +414,12 @@ def repair_headers(
             else None
         )
         linking = profile.headers_footers.section_linking
+        header_link_key = (
+            region,
+            region_profile.header_source,
+            region_profile.header_style_role,
+            region_profile.header_text,
+        )
         link_header = (
             index > 1
             and {
@@ -421,6 +428,7 @@ def repair_headers(
                 "appendix": linking.link_appendix_headers,
             }[region]
             and header_enabled
+            and header_link_key == previous_header_link_key
         )
         link_footer = (
             index > 1
@@ -477,6 +485,7 @@ def repair_headers(
                 )
                 else None
             )
+        previous_header_link_key = header_link_key if header_enabled else None
 
         if page_number_enabled:
             footer_reference = section.find(

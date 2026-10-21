@@ -1,7 +1,7 @@
 # Thesis formatting audit
 
 - Profile: `apple-university-thesis`
-- Document SHA-256: `7c0062884a840c70c3f5e4a6080b03ca057be3519d08a95253e6388a738767ce`
+- Document SHA-256: `13b4eaa029e04ed72910f3699e45cd0f1ac6660346ce242e8c4bd4e78754e29c`
 - Errors: 0
 - Violations: 29
 - Warnings: 314
@@ -15,7 +15,7 @@
 | violation | `PAGE.MARGIN.BODY` | `section:2` | Body margins do not match the selected profile. | {"bottom":30,"left":20,"right":20,"top":30} | {"bottom":30,"left":30,"right":30,"top":30} |
 | violation | `PAGE.PAPER.SIZE` | `section:2` | Paper dimensions do not match the selected profile. | {"height_mm":279.4,"width_mm":215.9} | {"height_mm":297,"width_mm":210} |
 | violation | `PAGE.SECTION.START` | `section:2` | Section start does not match the selected profile. | continuous | nextPage |
-| warning | `HEADER.FOOTER.LINKING` | `section:2` | Header or footer relationship target breaks required section linking. | ["header","footer"] | linked to previous |
+| warning | `HEADER.FOOTER.LINKING` | `section:2` | Header or footer relationship target breaks required section linking. | ["footer"] | linked to previous |
 | violation | `HEADER.FOOTER.HEADER_SOURCE` | `section:3` | Header content does not match the configured source. | missing or unrelated header source | current_heading_1 |
 | violation | `HEADER.FOOTER.PAGE_NUMBER` | `section:3` | No generated page-number field was found for this section. | false | true |
 | violation | `PAGE.MARGIN.BODY` | `section:3` | Body margins do not match the selected profile. | {"bottom":30,"left":20,"right":20,"top":30} | {"bottom":30,"left":30,"right":30,"top":30} |
@@ -24,7 +24,7 @@
 | violation | `HEADER.FOOTER.PAGE_NUMBER` | `section:4` | No generated page-number field was found for this section. | false | true |
 | violation | `PAGE.MARGIN.BODY` | `section:4` | Body margins do not match the selected profile. | {"bottom":30,"left":20,"right":20,"top":30} | {"bottom":30,"left":30,"right":30,"top":30} |
 | violation | `PAGE.PAPER.SIZE` | `section:4` | Paper dimensions do not match the selected profile. | {"height_mm":279.4,"width_mm":215.9} | {"height_mm":297,"width_mm":210} |
-| warning | `HEADER.FOOTER.LINKING` | `section:4` | Header or footer relationship target breaks required section linking. | ["header","footer"] | linked to previous |
+| warning | `HEADER.FOOTER.LINKING` | `section:4` | Header or footer relationship target breaks required section linking. | ["footer"] | linked to previous |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:1` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:2` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:5` | Paragraph role is ambiguous and requires review. | ambiguous | — |

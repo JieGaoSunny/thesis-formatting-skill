@@ -111,6 +111,17 @@ def _page_fonts(pdf: Path, page_number: int) -> set[str]:
         }
 
 
+def _page_header_text(pdf: Path, page_number: int) -> str:
+    import fitz
+
+    with fitz.open(pdf) as document:
+        return "".join(
+            str(block[4]).strip()
+            for block in document[page_number - 1].get_text("blocks")
+            if float(block[1]) < 120 and str(block[4]).strip()
+        )
+
+
 def _nonwhite_fraction(image_path: Path) -> float:
     with Image.open(image_path) as image:
         grayscale = image.convert("L")
@@ -237,6 +248,20 @@ def test_committed_before_after_demo_regenerates_end_to_end(
             if name == "after":
                 assert any(font.startswith("NotoSansCJK") for font in fonts)
                 assert any(font.startswith("NotoSerifCJK") for font in fonts)
+    after_manifest = manifests["after"]
+    body_header = _page_header_text(
+        tmp_path / "after.pdf",
+        _destination_page(after_manifest, "demo_body"),
+    )
+    appendix_header = _page_header_text(
+        tmp_path / "after.pdf",
+        _destination_page(after_manifest, "demo_appendix"),
+    )
+    assert "模拟记录字段与复算示例" not in body_header
+    assert "绪论" not in appendix_header
+    assert "讨论与结论" not in appendix_header
+    assert "附录" in appendix_header
+    assert "模拟记录字段与复算示例" in appendix_header
 
     images = sorted((tmp_path / "screenshots").glob("*/*.png"))
     assert len(images) == 14

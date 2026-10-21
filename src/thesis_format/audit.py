@@ -1335,6 +1335,7 @@ class HeaderFooterRule:
         front_section = _first_numbered_front_section(context, body_paragraph)
         header_targets = _effective_story_targets(context, "header")
         footer_targets = _effective_story_targets(context, "footer")
+        previous_header_link_key: tuple[str, str, str, str | None] | None = None
         for index, section in enumerate(context.section_elements, start=1):
             location = f"section:{index}"
             region = _section_region(index, body_section, appendix_section)
@@ -1351,11 +1352,19 @@ class HeaderFooterRule:
                 front_part is None or front_part.page_number_style != "none"
             )
             linking = context.profile.headers_footers.section_linking
+            header_link_key = (
+                region,
+                region_profile.header_source,
+                region_profile.header_style_role,
+                region_profile.header_text,
+            )
             link_headers = {
                 "front_matter": False,
                 "body": linking.link_body_headers,
                 "appendix": linking.link_appendix_headers,
-            }[region] and header_enabled
+            }[region] and header_enabled and (
+                header_link_key == previous_header_link_key
+            )
             link_footers = {
                 "front_matter": False,
                 "body": linking.link_body_footers,
@@ -1384,6 +1393,9 @@ class HeaderFooterRule:
                     broken_links,
                     "linked to previous",
                 )
+            previous_header_link_key = (
+                header_link_key if header_enabled else None
+            )
 
             header_target = header_targets[index - 1]
             header_paragraphs = tuple(

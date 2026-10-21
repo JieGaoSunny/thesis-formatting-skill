@@ -1,14 +1,14 @@
 # Thesis formatting audit
 
 - Profile: `apple-university-thesis`
-- Document SHA-256: `2ff5b1cfac04d9b2358ab432da9920469f6e321dc3af10f8dbdfa92e89147a96`
+- Document SHA-256: `ef71d2441eae1967b71b60d92a2a9fbc9955f8b25d90b99a54c4d09e54b975ca`
 - Errors: 0
 - Violations: 0
 - Warnings: 317
 
 | Severity | Rule | Location | Message | Before | After |
 |---|---|---|---|---|---|
-| warning | `HEADER.FOOTER.LINKING` | `section:2` | Header or footer relationship target breaks required section linking. | ["header","footer"] | linked to previous |
+| warning | `HEADER.FOOTER.LINKING` | `section:2` | Header or footer relationship target breaks required section linking. | ["footer"] | linked to previous |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:1` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:2` | Paragraph role is ambiguous and requires review. | ambiguous | — |
 | warning | `SEMANTIC.AMBIGUOUS_ROLE` | `paragraph:5` | Paragraph role is ambiguous and requires review. | ambiguous | — |
